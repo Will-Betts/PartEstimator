@@ -670,7 +670,9 @@ def estimate_cycle_time(features: dict, results: dict, table,
             quantity=float(orientations), quantity_units="orientations",
             detail=f"{orientations} distinct tool orientations at 5°, "
                    f"{index_s:.0f} s per index"))
-        est.cut_minutes = sum(t.minutes for t in est.terms)
+        # Deburring stays out of the machine cycle here too, or it is
+        # charged twice: once in cut time and again in door-to-door.
+        est.cut_minutes = sum(t.minutes for t in est.terms if t.name != "Deburring")
 
     est.machine_cycle_minutes = (est.cut_minutes + est.rapid_minutes
                                   + est.tool_change_minutes)

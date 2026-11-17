@@ -25,3 +25,10 @@ include = ["partestimator*"]
 "partestimator" = ["data/*.csv"]
 "partestimator.machining" = ["data/*.csv", "*.pdf"]
 "partestimator.smt" = ["*.md"]
+
+[tool.pytest.ini_options]
+# Default to the timing-model tests: pure Python + numpy, so they run on a
+# bare CI runner. The rest of tests/ needs the CAD kernel and Qt; run it
+# with "Run Self-Test.bat" (or `pytest tests`) inside the full .venv.
+testpaths = ["tests/timing"]
+addopts = "-ra"
