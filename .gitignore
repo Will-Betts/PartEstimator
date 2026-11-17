@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments (created by the launcher and by the test setup)
+.venv/
+.venv-test/
+installed-lock.txt
+python-path.txt
+
+# Test tooling
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Written by the app at runtime
+settings.json
+part_estimator.log
+last_error.log
+part_estimator-crash.txt

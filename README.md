@@ -308,3 +308,33 @@ Times.bat`** if you calibrated against v2.5.
   classification from the command line.
 - `python -m partestimator --sheet-cli part.step -o out` runs the full
   SMTv13 command line, with every option.
+
+## Development: unit tests
+
+The timing model (`machining/geometry/cycle_time.py`, `turn_time.py`, the rate
+and shop-profile loaders, and `calibrate.py`) has its own unit tests in
+`tests/timing/`. They need only Python and numpy, with no CAD kernel and no Qt,
+so they run in seconds. GitHub Actions runs them on every push and pull
+request (`.github/workflows/tests.yml`, Windows and Linux, Python 3.11 to 3.13).
+
+Set up once, from this folder:
+
+```
+python -m venv .venv-test
+.venv-test\Scripts\python -m pip install -r requirements-dev.txt
+```
+
+Run:
+
+```
+.venv-test\Scripts\python -m pytest
+```
+
+The arithmetic tests use a small synthetic rate table and shop profile
+(`tests/timing/support.py`), so retuning `machining_rates.csv` or
+`shop_profile.csv` does not break them. The shipped data files are checked
+separately for completeness and for sensible behaviour, such as harder
+materials taking longer, but no exact minutes are pinned against them.
+
+The full suite, including the CAD-kernel and GUI tests, still runs through
+`Run Self-Test.bat`, which also picks up `tests/timing/`.

@@ -1,0 +1,11 @@
+# Test environment for the pure-Python parts of Part Estimator (the timing
+# model and its data files). Deliberately light: no CAD kernel, no Qt, so it
+# installs in seconds and runs on any CI runner.
+#
+#   python -m venv .venv-test
+#   .venv-test\Scripts\python -m pip install -r requirements-dev.txt
+#   .venv-test\Scripts\python -m pytest
+#
+# numpy is pinned to the same version as requirements.txt.
+numpy==2.2.6
+pytest==8.4.2
