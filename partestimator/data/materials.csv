@@ -1,0 +1,60 @@
+name,family,iso_group,machining,sheet_metal,density_g_cc,uts_mpa,min_bend_t_across,min_bend_t_with,air_radius_coeff,k_curve,legacy_key,property_source,property_url,notes
+Aluminum 2024-T3,Aluminum,N,1,1,2.77,434,4.0,6.0,0.15,alu,,"ESI raw material selection guide, aluminum",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Aluminum.pdf,Bend radius from Aircraft Spruce 1/8 in column (4t-6t).
+Aluminum 2024-O,Aluminum,N,0,1,2.77,207,0.0,1.0,0.15,alu,,"ESI raw material selection guide, aluminum",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Aluminum.pdf,Annealed; formed then heat treated. Bend 0-1t typical for O temper.
+Aluminum 2219-T87,Aluminum,N,1,0,2.84,476,,,,,,typical handbook value (not individually verified),,Machining only. Density/UTS typical handbook values (not individually verified).
+Aluminum 3003-H14,Aluminum,N,1,1,2.73,150,0.5,1.0,0.15,alu,AL3003,"ESI raw material selection guide, aluminum",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Aluminum.pdf,Sheet values kept from SMTv13.
+Aluminum 5052-H32,Aluminum,N,1,1,2.68,230,1.0,2.0,0.15,alu,AL5052,"ESI raw material selection guide, aluminum",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Aluminum.pdf,Sheet values kept from SMTv13.
+Aluminum 6061-T6,Aluminum,N,1,1,2.7,310,3.0,4.0,0.15,alu,AL6061,"ESI raw material selection guide, aluminum",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Aluminum.pdf,Sheet values kept from SMTv13.
+Aluminum 6061-O,Aluminum,N,0,1,2.7,124,0.0,1.0,0.15,alu,,"ESI raw material selection guide, aluminum",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Aluminum.pdf,Annealed. Bend 0-1t typical for O temper.
+Aluminum 6063-T5,Aluminum,N,1,0,2.69,186,,,,,,typical handbook value (not individually verified),,Machining only. Typical handbook values (not individually verified).
+Aluminum 7050-T7451,Aluminum,N,1,0,2.83,524,,,,,,typical handbook value (not individually verified),,"Plate, machining only. Typical handbook values (not individually verified)."
+Aluminum 7075-T6,Aluminum,N,1,1,2.81,572,5.0,7.0,0.15,alu,,"Aircraft Spruce aluminum alloy data (minimum bend radius by thickness, 1/8 in column)",https://www.aircraftspruce.com/pdf/2026Individual/Cat26041.pdf,Bend radius from Aircraft Spruce 1/8 in column (5t-7t); UTS from ESI.
+Aluminum 7075-O,Aluminum,N,0,1,2.81,228,0.5,1.5,0.15,alu,,"Aircraft Spruce aluminum alloy data (minimum bend radius by thickness, 1/8 in column)",https://www.aircraftspruce.com/pdf/2026Individual/Cat26041.pdf,Bend radius from Aircraft Spruce 1/8 in column; UTS from ESI.
+Aluminum 7475-T7351,Aluminum,N,1,0,2.81,490,,,,,,typical handbook value (not individually verified),,"Plate, machining only. Typical handbook values (not individually verified)."
+Aluminum A356-T6 (cast),Aluminum,N,1,0,2.69,262,,,,,,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,Cast; density per Callister (356.0). UTS typical.
+Steel 1008/1010 CRS,Steel,P,1,1,7.87,400,1.0,1.5,0.156,steel,CRS,typical handbook value (not individually verified),,Sheet values kept from SMTv13 (CRS).
+Steel A36 HRS,Steel,P,1,1,7.85,450,1.5,2.0,0.156,steel,HRS,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,Sheet values kept from SMTv13 (HRS).
+Steel galvanized,Steel,P,0,1,7.87,380,1.0,1.5,0.156,steel,GALV,typical handbook value (not individually verified),,Sheet values kept from SMTv13.
+Steel 1018,Steel,P,1,0,7.87,440,,,,,,typical handbook value (not individually verified),,v2.5 machining row kept.
+Steel 1045,Steel,P,1,0,7.85,565,,,,,,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,Typical handbook UTS (not individually verified).
+Steel 12L14,Steel,P,1,0,7.87,540,,,,,,typical handbook value (not individually verified),,Free-machining. Typical handbook values.
+Steel 4130 (normalized),Steel,P,1,1,7.85,670,1.0,2.0,0.156,steel,,typical handbook value (not individually verified),,"Typical handbook values; bend radius typical, verify for your gauge."
+Steel 4140 (annealed),Steel,P,1,0,7.85,655,,,,,,typical handbook value (not individually verified),,v2.5 machining row kept.
+Steel 4140 (pre-hard 28-32 HRC),Steel,P,1,0,7.85,1020,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Steel 4340 (annealed),Steel,P,1,0,7.85,745,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Steel 8620,Steel,P,1,0,7.85,530,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Tool steel A2 (annealed),Steel,P,1,0,7.86,720,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Tool steel D2 (annealed),Steel,P,1,0,7.7,760,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Tool steel H13 (annealed),Steel,P,1,0,7.8,690,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Stainless 301 (1/4 hard),Stainless,M,0,1,7.89,862,1.0,2.0,0.166,ss,,"ESI raw material selection guide, stainless steel",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Stainless%20Steel.pdf,"UTS from ESI; bend radius typical for 1/4 hard, verify."
+Stainless 303,Stainless,M,1,0,8.0,620,,,,,,typical handbook value (not individually verified),,v2.5 machining row kept.
+Stainless 304,Stainless,M,1,1,8.0,620,1.0,1.5,0.166,ss,SS304,"ESI raw material selection guide, stainless steel",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Stainless%20Steel.pdf,Sheet values kept from SMTv13.
+Stainless 316,Stainless,M,1,1,8.0,620,1.0,1.5,0.166,ss,SS316,"ESI raw material selection guide, stainless steel",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Stainless%20Steel.pdf,Sheet values kept from SMTv13.
+Stainless 321,Stainless,M,1,1,7.92,515,1.0,1.5,0.166,ss,,typical handbook value (not individually verified),,Behaves like 304 in forming and cutting. Typical values.
+Stainless 410 (annealed),Stainless,M,1,1,7.64,448,1.0,2.0,0.166,ss,,"ESI raw material selection guide, stainless steel",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Stainless%20Steel.pdf,UTS and density from ESI; bend typical.
+Stainless 440C (annealed),Stainless,M,1,0,7.65,760,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Stainless 15-5PH (H1025),Stainless,M,1,0,7.8,1070,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Stainless 17-4PH (H1150),Stainless,M,1,0,7.8,930,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Stainless 17-4PH (H900),Stainless,M,1,0,7.8,1310,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Stainless 17-7PH (Cond A),Stainless,M,0,1,7.81,896,1.0,1.5,0.166,ss,,"ESI raw material selection guide, stainless steel",https://info.esict.com/hubfs/Raw%20Material%20Selection%20Guides/Raw-Material-Selection-Guide-Stainless%20Steel.pdf,UTS and density from ESI; Condition A formed then heat treated.
+A-286 (solution treated),Superalloy,S,1,1,7.94,620,1.0,2.0,0.166,ss,,typical handbook value (not individually verified),,"Iron-base superalloy. Typical values, verify bend radius."
+Inconel 625 (annealed),Superalloy,S,1,1,8.44,880,1.0,2.0,0.166,ss,,Langhe density chart of alloys (nickel-base),https://langhe-industry.com/?p=6770,Density per Langhe chart; UTS and bend typical.
+Inconel 718 (annealed),Superalloy,S,1,1,8.19,965,1.0,2.0,0.166,ss,,Langhe density chart of alloys (nickel-base),https://langhe-industry.com/?p=6770,Density per Langhe chart; UTS and bend typical.
+Inconel 718 (aged),Superalloy,S,1,0,8.19,1330,,,,,,"FM Carbide material data, Inconel 718",https://fmcarbide.com/pages/material-inconel-718,UTS 1330 MPa per FM Carbide; density per Langhe.
+Hastelloy X,Superalloy,S,1,1,8.2,785,1.0,2.0,0.166,ss,,Langhe density chart of alloys (nickel-base),https://langhe-industry.com/?p=6770,Density per Langhe chart; UTS and bend typical.
+Titanium CP Grade 2,Titanium,S,1,1,4.51,345,2.0,2.5,0.166,ss,,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,Bend radius = ASTM B265 bend-test radius (conservative); density per Callister (CP Ti).
+Titanium Ti-6Al-4V,Titanium,S,1,1,4.43,895,4.5,5.0,0.166,ss,,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,Annealed. Bend radius = ASTM B265 Grade 5 test radius; usually hot formed. Density per Callister.
+Copper C110,Copper,N,1,1,8.89,220,0.5,1.0,0.15,alu,CU,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,Sheet values kept from SMTv13.
+Brass C260,Copper,N,0,1,8.53,340,1.0,1.5,0.15,alu,BRASS,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,Sheet values kept from SMTv13.
+Brass C360,Copper,N,1,0,8.5,385,,,,,,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,v2.5 machining row kept.
+Bronze C932 (bearing),Copper,N,1,0,8.93,240,,,,,,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,Density per Callister (C93200).
+Bronze C954 (aluminum),Copper,N,1,0,7.45,585,,,,,,typical handbook value (not individually verified),,Typical handbook values.
+Beryllium copper C172,Copper,N,1,1,8.25,480,0.0,0.5,0.15,alu,,"Callister, Materials Science and Engineering, Table B.1 room-temperature densities",https://www.scribd.com/document/660473358/Appendix,Solution annealed (A). Density per Callister; bend typical.
+Delrin (Acetal),Plastic,N,1,0,1.41,69,,,,,,typical handbook value (not individually verified),,v2.5 machining row kept.
+Nylon 6/6,Plastic,N,1,0,1.14,85,,,,,,typical handbook value (not individually verified),,v2.5 machining row kept.
+PEEK,Plastic,N,1,0,1.31,97,,,,,,typical handbook value (not individually verified),,Typical datasheet values.
+Ultem 1000 (PEI),Plastic,N,1,0,1.27,105,,,,,,typical handbook value (not individually verified),,"Typical datasheet values (15,200 psi)."
+UHMW-PE,Plastic,N,1,0,0.93,40,,,,,,typical handbook value (not individually verified),,Typical datasheet values.
+PTFE,Plastic,N,1,0,2.16,25,,,,,,typical handbook value (not individually verified),,Typical datasheet values.
+Polycarbonate,Plastic,N,1,0,1.2,65,,,,,,typical handbook value (not individually verified),,"Typical datasheet values (9,500 psi)."
+Acrylic (PMMA),Plastic,N,1,0,1.19,69,,,,,,typical handbook value (not individually verified),,"Typical datasheet values (10,000 psi)."

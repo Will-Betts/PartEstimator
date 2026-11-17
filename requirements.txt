@@ -1,0 +1,37 @@
+# Part Estimator -- exact pins for the direct dependencies.
+#
+# Installed ONCE, into a .venv inside this folder, by "Run Part Estimator.bat".
+# After that the tool makes no network connection of any kind.
+#
+# Every pin below was checked to have a prebuilt win_amd64 wheel for CPython
+# 3.11, 3.12 and 3.13 (pip download --only-binary=:all: --platform win_amd64).
+# 3.12 is the primary target. Install is --only-binary=:all:, so no package can
+# run its own setup code during install.
+
+# --- CAD kernel (OpenCASCADE), WITHOUT its bundled VTK ----------------------
+# Shared by both tools. The machining viewer gets VTK from the `vtk` pin below,
+# so the kernel build that bundles VTK is not needed.
+cadquery-ocp-novtk==7.9.3.1.1
+
+# --- numerics ----------------------------------------------------------------
+numpy==2.2.6
+scipy==1.15.3
+
+# --- window toolkit: Qt core/gui/widgets only -------------------------------
+PySide6-Essentials==6.9.1
+shiboken6==6.9.1
+
+# --- machining 3D viewer ------------------------------------------------------
+vtk==9.5.2
+pyvista==0.46.4
+pyvistaqt==0.11.3
+qtpy==2.4.3
+
+# --- DXF writing --------------------------------------------------------------
+ezdxf==1.4.4
+
+# Transitive dependencies are left to the resolver on the first install, then
+# locked: the launcher writes installed-lock.txt with `pip freeze` after a
+# successful install and installs from THAT on every later setup. Note that
+# pyvista pulls in pooch/requests (used only by its downloadable example
+# datasets); nothing in this tool imports them.

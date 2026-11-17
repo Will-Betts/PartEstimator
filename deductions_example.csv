@@ -1,0 +1,6 @@
+material,thickness,radius,v_die,angle_deg,deduction
+CRS,2.0,2.5,16,90,3.45
+CRS,2.0,2.5,16,45,1.62
+CRS,3.0,3.8,25,90,5.21
+AL5052,2.0,2.5,16,90,3.30
+SS304,1.5,1.9,12,90,2.58

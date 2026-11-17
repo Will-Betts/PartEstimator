@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "partestimator"
+version = "1.1.0"
+description = "One window for sheet metal (flat pattern, DXF) and machined parts (cycle time) from STEP files. Offline."
+requires-python = ">=3.11,<3.14"
+# Exact pins live in requirements.txt (and installed-lock.txt after setup);
+# the launcher installs from those. These are the same packages, unpinned,
+# for anyone installing the package some other way.
+dependencies = [
+    "cadquery-ocp-novtk", "numpy", "scipy", "PySide6-Essentials",
+    "vtk", "pyvista", "pyvistaqt", "qtpy", "ezdxf",
+]
+
+[project.scripts]
+part-estimator = "partestimator.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["partestimator*"]
+
+[tool.setuptools.package-data]
+"partestimator" = ["data/*.csv"]
+"partestimator.machining" = ["data/*.csv", "*.pdf"]
+"partestimator.smt" = ["*.md"]

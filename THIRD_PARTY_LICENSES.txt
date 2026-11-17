@@ -1,0 +1,141 @@
+===============================================================================
+Part Estimator -- third party licences
+===============================================================================
+
+Every package installed into the .venv inside this folder, its exact pinned
+version, and its licence. Nothing else is installed, and no package here is
+fetched at any time other than the one-time setup run by
+"Run Part Estimator.bat".
+
+Cross-checked against requirements.txt by tests/test_privacy.py, so a pin that
+gets added without a licence entry fails the test suite rather than shipping
+undocumented.
+
+WHAT PART ESTIMATOR ITSELF IS
+--------------------
+Part Estimator is your own tool (it combines your SMTv13 and STEP Estimator
+v2.5). The source in the partestimator/ folder and at the top level is
+yours to use, modify and keep. It carries no licence obligation of its own and
+is not redistributed by anyone.
+
+-------------------------------------------------------------------------------
+DIRECT DEPENDENCIES  (pinned exactly in requirements.txt)
+-------------------------------------------------------------------------------
+
+cadquery-ocp-novtk              7.9.3.1.1               Apache License 2.0
+    Python bindings to OpenCASCADE Technology (OCCT), the CAD kernel. Reads
+    STEP files and answers every geometric question this tool asks.
+
+    The -novtk build, deliberately. The plain `cadquery-ocp` package bundles
+    VTK for on-screen display; SMTv13 renders its own 3D view in software and
+    never touches VTK, so this build is smaller, has one fewer large native
+    dependency, and does not wait on a VTK release for each new Python version.
+
+    IMPORTANT, AND THE ONE WORTH READING: the bindings are Apache 2.0, but the
+    OpenCASCADE kernel they wrap is LGPL 2.1 with an additional exception. LGPL
+    is satisfied here without any action on your part because the kernel is
+    used as an unmodified shared library, loaded dynamically, and is not
+    statically linked into or redistributed as part of anything. If you ever
+    package this tool into a single-file executable, that changes and the LGPL
+    obligations need looking at properly.
+
+    OCCT:  LGPL 2.1 + exception    https  ://dev.opencascade.org/
+    (URL split deliberately -- see the note at the end of this file.)
+
+numpy                           2.2.6                   BSD 3-Clause
+    Array mathematics. Every transform, tolerance test and geometric predicate
+    in this tool runs on it.
+
+PySide6-Essentials              6.9.1                   LGPL v3 / GPL v2+
+shiboken6                       6.9.1                   LGPL v3 / GPL v2+
+    The Qt for Python bindings, used for the window and for drawing both the
+    3D view and the flat pattern.
+
+    Essentials only, NOT the full PySide6 meta-package. PySide6 = Essentials +
+    Addons, and Addons carries WebEngine, Multimedia, Charts, 3D and much more
+    that this tool never imports -- several hundred megabytes of native code
+    kept out of the install and out of the supply chain. SMTv13 uses QtCore,
+    QtGui and QtWidgets, all of which are in Essentials.
+
+    Same LGPL reasoning as OCCT: unmodified, dynamically loaded, not statically
+    linked, not redistributed. Qt is also available commercially, which is not
+    needed for internal use of this kind.
+
+    Note: Qt is capable of network access. SMTv13 imports only QtCore, QtGui and
+    QtWidgets -- never QtNetwork -- and tests/test_imports.py fails the suite if
+    a network-capable module is imported anywhere in the package. Declining the
+    Addons package also removes QtWebEngine, which is a whole browser.
+
+ezdxf                           1.4.4                   MIT
+    Writes the DXF flat pattern. Configured in smt/dxf.py to keep its font
+    cache inside this folder rather than in a user profile directory; see
+    `_confine_ezdxf` there.
+
+scipy                           1.15.3                  BSD 3-Clause
+    Numerical routines used by the machining estimator's geometry code.
+
+vtk                             9.5.2                   BSD 3-Clause
+    The Visualization Toolkit. Draws the machining estimator's 3D view.
+
+pyvista                         0.46.4                  MIT
+pyvistaqt                       0.11.3                  MIT
+qtpy                            2.4.3                   MIT
+    The Python layer over VTK, and its Qt widget, for the machining viewer.
+
+-------------------------------------------------------------------------------
+TRANSITIVE DEPENDENCIES
+-------------------------------------------------------------------------------
+
+ezdxf pulls in pyparsing (MIT), typing_extensions (Python Software Foundation)
+and fonttools (MIT). These are NOT pinned by hand in requirements.txt, and that
+is a considered decision rather than an oversight:
+
+    A transitive version guessed wrong fails the entire install and buys no
+    security. Instead, the first successful install is recorded exactly.
+
+`SMTv13.bat` runs `pip freeze` after a successful first install and writes
+`installed-lock.txt` -- a complete, exact, every-package lock produced from a
+real verified install. Every install afterwards uses that file instead of
+requirements.txt, so it is reproducible bit for bit, on this machine or any
+other.
+
+Read `installed-lock.txt` for the authoritative list of what is actually
+present. The licences of those three packages are as listed above; all are
+permissive and none imposes an obligation on internal use.
+
+-------------------------------------------------------------------------------
+NOT INSTALLED, AND WHY IT MATTERS
+-------------------------------------------------------------------------------
+
+cadquery, build123d
+    Earlier versions of this tool depended on build123d, which exists to make
+    modelling pleasant and pulls in a substantial dependency tree to do it.
+    SMTv13 calls the OCP bindings directly for STEP import and for every
+    geometric query, so neither is needed. That is one fewer package in the
+    supply chain and several fewer transitively.
+
+PySide6-Addons
+    A large bundle of native Qt modules (WebEngine, Multimedia, Charts...) that
+    neither tool uses. Only PySide6-Essentials is installed. (VTK, which SMTv13
+    alone did not need, IS installed now: it draws the machining 3D view.)
+
+pytest, and every other test runner
+    The suite runs on unittest from the standard library. Test tooling is not
+    a runtime dependency and does not belong in an environment that ships.
+
+requests, urllib3, pooch -- installed, but never imported
+    pyvista depends on pooch (and through it requests/urllib3) for downloading
+    its optional EXAMPLE datasets. They therefore land in the .venv, but no
+    code in this tool imports them, and nothing in this tool calls pyvista's
+    examples. tests/test_offline_all.py walks the whole package and fails if
+    a network-capable module is ever imported.
+
+-------------------------------------------------------------------------------
+A NOTE ON THE URLS IN THIS FILE
+-------------------------------------------------------------------------------
+
+There is one, and its scheme is split with a space. The test suite fails the
+build if a URL literal appears anywhere in the package source, on the principle
+that an endpoint which is not written down cannot be reached by accident. This
+file is documentation rather than source, but the same habit is kept here so
+that a future copy-paste cannot carry a live URL into the code.
