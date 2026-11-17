@@ -63,6 +63,8 @@ USAGE
 APP
   gui [file.step] [-Wait]     Open the window. Detached by default; -Wait keeps
                               it in this console and streams the log.
+                              --gl software|hardware overrides the 3D renderer
+                              (auto: software when the driver lacks OpenGL 3.2).
   classify <step...>          Sheet metal or machined? Options: --json, --cutoff IN
   sheet <step> [options]      Sheet metal flat pattern, DXF, STEP and report.
                               `.\pe.ps1 sheet --help` lists every option.

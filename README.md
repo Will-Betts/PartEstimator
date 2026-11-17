@@ -55,7 +55,7 @@ Windows PowerShell 5.1 and in PowerShell 7.
 
    ```powershell
    .\pe.ps1 setup -Dev     # .venv in this folder, pinned packages, pytest
-   .\pe.ps1 test -Full     # every check (about 450); expect PASS / PASS
+   .\pe.ps1 test -Full     # every check (about 460); expect PASS / PASS
    .\pe.ps1 gui            # open the window
    ```
 
@@ -65,7 +65,7 @@ Windows PowerShell 5.1 and in PowerShell 7.
 ## Commands
 
 ```text
-.\pe.ps1 gui [file.step] [-Wait]   open the window (detached; -Wait streams the log here)
+.\pe.ps1 gui [file.step] [-Wait]   open the window (detached; -Wait streams the log here; --gl)
 .\pe.ps1 classify <step...>        sheet metal or machined?   --json  --cutoff IN
 .\pe.ps1 sheet <step> [options]    flat pattern: DXF, STEP, report   (sheet --help)
 .\pe.ps1 calibrate <csv>           fit calibration factors to measured times
@@ -104,6 +104,20 @@ so code changes take effect without reinstalling. It also puts a
 part-estimator --help
 part-estimator classify bracket.step --json
 python -m partestimator gui bracket.step    # the same CLI
+```
+
+**Virtual machines and remote desktops.** The 3D viewer needs OpenGL 3.2.
+A VM without a GPU (Hyper-V, most VDI) offers only Windows' built-in
+OpenGL 1.1, which used to crash the window silently at startup. `gui` now
+checks the driver first (about 0.2 s). If it is too old, the window uses the
+software renderer that PySide6 already ships (`opengl32sw.dll`, Mesa
+llvmpipe, OpenGL 3.3), so nothing extra is downloaded. It draws on the CPU,
+so very large parts rotate less smoothly. The log says which one is in use
+(`3D viewer: ...`). Override it with:
+
+```powershell
+.\pe.ps1 gui --gl software    # force the software renderer
+.\pe.ps1 gui --gl hardware    # always use the graphics driver
 ```
 
 **Choosing the Python.** `setup` tries `py -3.12`, then `-3.13`, then
@@ -401,9 +415,10 @@ separately for completeness and for sensible behaviour, such as harder
 materials taking longer, but no exact minutes are pinned against them.
 
 The full suite, including the CAD-kernel and GUI tests, runs through
-`.\pe.ps1 test -Full`, which also picks up `tests/timing/`. The GUI tests open
-the VTK viewer, so they need a real OpenGL 3.2 display. Over Remote Desktop
-without a capable GPU they crash the run. To run everything else:
+`.\pe.ps1 test -Full`, which also picks up `tests/timing/`. It makes the same
+OpenGL choice as `gui`, so the GUI tests also run on a VM without a GPU.
+Running pytest over `tests/` directly skips that choice, so there the GUI
+tests need a real OpenGL 3.2 display. To leave them out:
 
 ```powershell
 .\pe.ps1 test tests --ignore=tests/test_gui_smoke.py --ignore=tests/test_unified_window.py

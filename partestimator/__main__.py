@@ -31,6 +31,7 @@ LEGACY_FLAGS = {"--classify": "classify", "--sheet-cli": "sheet"}
 EPILOG = """\
 examples:
   part-estimator gui bracket.step
+  part-estimator gui --gl software        (force the software 3D renderer)
   part-estimator classify parts\\*.step --json
   part-estimator sheet bracket.step --material AL5052 -o out
   part-estimator calibrate training_table.csv
@@ -62,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
     g = sub.add_parser("gui", help="open the window (the default with no command)",
                        description="Open the Part Estimator window.")
     g.add_argument("step", nargs="?", type=Path, help="STEP file to open")
+    g.add_argument("--gl", choices=("auto", "hardware", "software"), default="auto",
+                   help="3D viewer OpenGL: auto (default) uses the graphics driver if "
+                        "it offers 3.2+, else the software renderer bundled with "
+                        "PySide6 (for VMs and remote desktops without a GPU)")
 
     c = sub.add_parser("classify", help="report whether parts are sheet metal or machined",
                        description="Classify STEP files as sheet metal or machined. "
@@ -163,10 +168,16 @@ def cmd_selftest(args: argparse.Namespace) -> int:  # noqa: ARG001
 
 def cmd_gui(args: argparse.Namespace) -> int:
     try:
-        from .smt.diag import install_excepthook, setup_logging
+        # Must run before anything imports Qt or VTK: see partestimator/opengl.py.
+        from .opengl import choose
+
+        gl = choose(getattr(args, "gl", "auto"))
+
+        from .smt.diag import LOGGER, install_excepthook, setup_logging
 
         setup_logging()
         install_excepthook()
+        LOGGER.info("3D viewer: %s", gl)
         from .app import run
     except BaseException as exc:  # noqa: BLE001
         _report_startup_failure(exc)

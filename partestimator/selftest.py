@@ -24,7 +24,13 @@ def main() -> int:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
+    # Same OpenGL choice as the window, before anything loads Qt or VTK, so the
+    # viewer tests also run on a VM or remote desktop without a GPU.
+    from partestimator.opengl import choose
 
+    gl = choose("auto")
+
+    print(f" 3D viewer: {gl}")
     print("=" * 70)
     print(" 1/2  Machining estimator self-test")
     print("=" * 70)
