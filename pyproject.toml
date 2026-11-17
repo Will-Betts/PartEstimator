@@ -8,8 +8,9 @@ version = "1.1.0"
 description = "One window for sheet metal (flat pattern, DXF) and machined parts (cycle time) from STEP files. Offline."
 requires-python = ">=3.11,<3.14"
 # Exact pins live in requirements.txt (and installed-lock.txt after setup);
-# the launcher installs from those. These are the same packages, unpinned,
-# for anyone installing the package some other way.
+# pe.ps1 installs from those, then installs this package editable with
+# --no-deps. These are the same packages, unpinned, for anyone installing the
+# package some other way.
 dependencies = [
     "cadquery-ocp-novtk", "numpy", "scipy", "PySide6-Essentials",
     "vtk", "pyvista", "pyvistaqt", "qtpy", "ezdxf",
@@ -27,8 +28,9 @@ include = ["partestimator*"]
 "partestimator.smt" = ["*.md"]
 
 [tool.pytest.ini_options]
-# Default to the timing-model tests: pure Python + numpy, so they run on a
-# bare CI runner. The rest of tests/ needs the CAD kernel and Qt; run it
-# with "Run Self-Test.bat" (or `pytest tests`) inside the full .venv.
-testpaths = ["tests/timing"]
+# Default to the fast tests: the timing model and the command line, pure
+# Python + numpy, so they run on a bare CI runner. The rest of tests/ needs
+# the CAD kernel and Qt; run it with `.\pe.ps1 test -Full` (or `pytest tests`
+# inside the full .venv).
+testpaths = ["tests/timing", "tests/test_cli.py"]
 addopts = "-ra"

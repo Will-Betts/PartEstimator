@@ -9,10 +9,10 @@ from __future__ import annotations
 _HINT = """
 The SMTv13 window needs PySide6.
 
-Run SMTv13.bat, which installs the pinned dependencies into a .venv inside this
-folder on first run and then goes straight to the tool.
+Run `.\\pe.ps1 setup`, which installs the pinned dependencies into a .venv inside this
+folder.
 
-The command line tool (main.py --cli) and the Python API work without Qt.
+The command line tool (`.\\pe.ps1 sheet`) and the Python API work without Qt.
 """
 
 

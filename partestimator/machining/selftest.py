@@ -8,7 +8,8 @@ answers. This is the fastest way to catch an environment/API mismatch
 (e.g. a cadquery-ocp version where a static-method name differs slightly)
 before pointing the tool at production geometry.
 
-Usage: "Run Self-Test.bat", or with the venv active:
+Usage: `.\\pe.ps1 test -Full` runs this with everything else, or with the
+venv active:
     python -m partestimator.machining.selftest
 """
 from __future__ import annotations

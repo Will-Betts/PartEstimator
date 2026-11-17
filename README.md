@@ -36,26 +36,85 @@ no network connection, and it writes nothing outside this folder.
 
 ## Getting started
 
-1. Unzip to a folder with a **short path**, such as `C:\Tools\PartEstimator`.
-   The CAD kernel has deeply nested files, and Windows rejects paths longer
-   than 260 characters.
+Everything runs from PowerShell through one script, `pe.ps1`. It works in
+Windows PowerShell 5.1 and in PowerShell 7.
+
+1. Clone or unzip to a folder with a **short path**, such as
+   `C:\Tools\PartEstimator`. The CAD kernel has deeply nested files, and
+   Windows rejects paths longer than 260 characters.
 2. Make sure **Python 3.12 (64-bit)** is installed. 3.11 and 3.13 also work.
-3. Double-click **`Run Part Estimator.bat`**. The first run creates a `.venv`
-   inside this folder and installs the pinned packages. It needs internet
-   **once** and takes several minutes. After that the app opens immediately,
-   with no console window.
-4. Run **`Run Self-Test.bat`** once. It builds known parts in the CAD kernel
-   and checks every answer. Expect *Machining self-test: PASS* and *Unit tests:
-   PASS*.
+3. Allow local scripts once, if you have not already:
 
-You can also drop a `.step` file onto the launcher, or onto the open window.
+   ```powershell
+   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+   ```
 
-| File | What it does |
+   (Or run it without changing policy:
+   `powershell -ExecutionPolicy Bypass -File .\pe.ps1 ...`)
+4. Set up and check:
+
+   ```powershell
+   .\pe.ps1 setup -Dev     # .venv in this folder, pinned packages, pytest
+   .\pe.ps1 test -Full     # every check (about 450); expect PASS / PASS
+   .\pe.ps1 gui            # open the window
+   ```
+
+   The first `setup` needs internet **once** and takes several minutes.
+   After that nothing makes a network connection.
+
+## Commands
+
+```text
+.\pe.ps1 gui [file.step] [-Wait]   open the window (detached; -Wait streams the log here)
+.\pe.ps1 classify <step...>        sheet metal or machined?   --json  --cutoff IN
+.\pe.ps1 sheet <step> [options]    flat pattern: DXF, STEP, report   (sheet --help)
+.\pe.ps1 calibrate <csv>           fit calibration factors to measured times
+.\pe.ps1 test [pytest args]        fast tests: timing model and CLI (seconds)
+.\pe.ps1 test -Full                machining self-test plus the full suite
+.\pe.ps1 setup [-Dev] [-Force]     create/update .venv; -Force rebuilds from scratch
+.\pe.ps1 reset                     delete .venv
+.\pe.ps1 py [args]                 the venv's Python, e.g. .\pe.ps1 py -m pip list
+.\pe.ps1 help
+```
+
+- Any command except `setup`, `reset` and `help` sets `.venv` up first if it is
+  missing, or updates it if `requirements.txt` has changed.
+- Arguments after the command go to Python untouched, and **exit codes are
+  passed through**, so the script works in other scripts and CI.
+- Relative paths are taken from your current directory.
+- Output can be piped:
+
+  ```powershell
+  (.\pe.ps1 classify .\parts\*.step --json | ConvertFrom-Json) |
+      Where-Object kind -eq machined | Select-Object file, reason
+  .\pe.ps1 sheet bracket.step --material AL5052 -o out -q
+  ```
+
+  `classify` expands wildcards itself, because PowerShell passes `*.step`
+  through to a native program unexpanded. Keep the parentheses around
+  `... | ConvertFrom-Json`: Windows PowerShell 5.1 otherwise passes the whole
+  array down the pipe as one object.
+
+**Working inside the venv.** `setup` installs this package in editable mode,
+so code changes take effect without reinstalling. It also puts a
+`part-estimator` command in the venv:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+part-estimator --help
+part-estimator classify bracket.step --json
+python -m partestimator gui bracket.step    # the same CLI
+```
+
+**Choosing the Python.** `setup` tries `py -3.12`, then `-3.13`, then
+`-3.11`, then `python` on `PATH`, and accepts only 64-bit 3.11 to 3.13. To
+override it, set `$env:PE_PYTHON` or put the full path to `python.exe` in
+`python-path.txt` beside `pe.ps1`.
+
+| File | What it is |
 |---|---|
-| `Run Part Estimator.bat` | Starts the app. Sets up the environment on first run, and again if `requirements.txt` changes. |
-| `Run Self-Test.bat` | Runs every automated check (about 300). |
-| `Calibrate To My Times.bat` | Fits the machining calibration factors to your measured times. Drag your exported CSV onto it. |
-| `Reset Environment.bat` | Deletes `.venv` so the next launch rebuilds it. |
+| `pe.ps1` | The entry point (see above). The `PIP_*` settings it applies last only while it runs; your shell is left as it was. |
+| `installed-lock.txt` | Written by the first `setup`: the exact package set that resolved. Later setups install from it. It is discarded when `requirements.txt` changes. |
 | `settings.json` | Created when you change Settings. Holds the sheet metal thickness cutoff. |
 | `part_estimator.log` | Log of the last run (operations and counts only, no file paths). |
 | `last_error.log` | Written only if the app fails to start. |
@@ -251,8 +310,7 @@ turned up bugs in the originals. These fixes are included.
 - Two stale self-test expectations were corrected. One claimed hole edges are
   inside corners; the other checked for a weight column removed in Rev 2.0.
 
-➜ Because deburr and thin-wall terms now work, **re-run `Calibrate To My
-Times.bat`** if you calibrated against v2.5.
+➜ Because deburr and thin-wall terms now work, **re-run `.\pe.ps1 calibrate`** if you calibrated against v2.5.
 
 **Sheet metal tool**
 
@@ -285,7 +343,7 @@ Times.bat`** if you calibrated against v2.5.
   `tests/test_offline_all.py` fails if anything ever does.
 - **Not yet verified on Windows.** Everything was built and tested on Linux
   with Python 3.12 and the exact pinned packages. Every pin was confirmed to
-  have a Windows wheel for Python 3.11–3.13. `Run Self-Test.bat` is the
+  have a Windows wheel for Python 3.11–3.13. `.\pe.ps1 test -Full` is the
   check on your machine.
 - **Not verified against your real parts.** No production STEP files were
   available, so all testing used parts built in the kernel with known
@@ -304,10 +362,12 @@ Times.bat`** if you calibrated against v2.5.
   each row with its source URL.
 - `partestimator/machining/data/shop_profile.csv`: machine limits, duty
   factors and calibration, including the new lathe settings.
-- `python -m partestimator --classify a.step b.step` prints the
-  classification from the command line.
-- `python -m partestimator --sheet-cli part.step -o out` runs the full
-  SMTv13 command line, with every option.
+- `.\pe.ps1 classify a.step b.step` prints the classification from the
+  command line (`--json` for every measurement).
+- `.\pe.ps1 sheet part.step -o out` runs the full SMTv13 command line, with
+  every option (`.\pe.ps1 sheet --help`).
+- The older `python -m partestimator --classify ...` / `--sheet-cli ...`
+  forms still work.
 
 ## Development: unit tests
 
@@ -317,16 +377,20 @@ and shop-profile loaders, and `calibrate.py`) has its own unit tests in
 so they run in seconds. GitHub Actions runs them on every push and pull
 request (`.github/workflows/tests.yml`, Windows and Linux, Python 3.11 to 3.13).
 
-Set up once, from this folder:
+Run them, from this folder:
 
+```powershell
+.\pe.ps1 test                      # timing model + CLI tests (installs pytest on first use)
+.\pe.ps1 test -k turn -x           # any pytest arguments pass through
+.\pe.ps1 test tests/test_cli.py    # a single file
 ```
+
+CI uses a separate, minimal environment with no CAD kernel and no Qt. To
+reproduce it locally:
+
+```powershell
 python -m venv .venv-test
 .venv-test\Scripts\python -m pip install -r requirements-dev.txt
-```
-
-Run:
-
-```
 .venv-test\Scripts\python -m pytest
 ```
 
@@ -336,5 +400,11 @@ The arithmetic tests use a small synthetic rate table and shop profile
 separately for completeness and for sensible behaviour, such as harder
 materials taking longer, but no exact minutes are pinned against them.
 
-The full suite, including the CAD-kernel and GUI tests, still runs through
-`Run Self-Test.bat`, which also picks up `tests/timing/`.
+The full suite, including the CAD-kernel and GUI tests, runs through
+`.\pe.ps1 test -Full`, which also picks up `tests/timing/`. The GUI tests open
+the VTK viewer, so they need a real OpenGL 3.2 display. Over Remote Desktop
+without a capable GPU they crash the run. To run everything else:
+
+```powershell
+.\pe.ps1 test tests --ignore=tests/test_gui_smoke.py --ignore=tests/test_unified_window.py
+```

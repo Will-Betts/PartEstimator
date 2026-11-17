@@ -26,8 +26,8 @@ from __future__ import annotations
 _IMPORT_HINT = """
 smt.occ requires the OpenCASCADE Python bindings (cadquery-ocp-novtk).
 
-Run SMTv13.bat, which installs the exact pinned versions into a .venv inside
-this folder on first run.
+Run `.\\pe.ps1 setup`, which installs the exact pinned versions into a .venv inside
+this folder.
 
 The rest of the package -- the unfold solver, allowance maths, feature
 classification and reporting -- imports and runs without a kernel.
