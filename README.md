@@ -177,12 +177,14 @@ has the same name and density everywhere. Machining speeds and feeds are in
 `machining/data/machining_rates.csv` under the same names: ten values per
 material, five for milling and five for turning.
 
-**Picking a material.** Both tabs use the same picker: a **family** list
-(Aluminum, Steel, Stainless, ...) and then the **alloy** within it, so no
-list is longer than about fifteen entries. You can also type into the search
-box above them. Every word must match the name, family, ISO group or old
+**Picking a material.** Both tabs use the same single dropdown. Click its
+arrow for a menu of **families** (Aluminum, Steel, Stainless, ...); each
+opens a submenu of its **alloys**, so no list is longer than about fifteen
+entries. The current alloy is ticked and its family shown in bold. Or just
+type into the box (or start typing while the menu is open): matches drop
+down as you type. Every word must match the name, family, ISO group or old
 short key, so `7075`, `stainless 304`, `inconel 718` and `CRS` all work.
-Press Enter to take the first match.
+Press Enter to take the first match, or Esc to put the old value back.
 
 | Family | Materials |
 |---|---|
@@ -295,10 +297,77 @@ overlay, feature row and export all follow it at once.
 - With **Lathe** selected, turning is priced from a round bar: choose
   **Round bar** to set its size. Other stock types show a warning.
 
-**Extrusions.** Pick a shape (angle, channel, I-beam, tee, rectangular or
-round tube, flat/square bar, hex bar), then a size. Typing in the search box
-also works, e.g. `angle 2 x 2`. When you switch to Extrusion, the tool
-suggests the profile that holds the part with the least material.
+**Extrusions.** The profile is one dropdown, like the material. Open it for
+a menu of shapes (angle, channel, I-beam, tee, rectangular or round tube,
+flat/square bar, hex bar) and aerospace standards (AND10133 to AND10141),
+each with its sizes or dash numbers in a submenu. Or type into it, e.g.
+`angle 2 x 2` or `AND10134-1205`. When you switch to Extrusion, the tool
+suggests the profile that holds the part with the least material, from both
+lists.
+
+**Part orientation in stock.** For plate and extrusion stock, the part is
+placed in its stock by the smallest box that fits it. When that is not how
+it will be held, set it under *Part orientation in stock*:
+
+- **Pick part face**, then click a flat face of the part in the 3D view (it
+  turns green; curved faces are refused). **Pick stock face**, then click a
+  face of the stock box. Either order. The two faces are made parallel, and
+  the stock is refitted as tight as that allows.
+- **Rotate part** X, Y and Z turn the part, in degrees, about the stock's
+  length, width and thickness axes from there (right-hand rule). The part
+  stays put on screen and the stock turns round it.
+- The stock's faces are named by size, so if the part is longest in the
+  direction you picked, the note under the controls says the face ended up
+  on the stock's end or side rather than its top.
+- **Automatic orientation** goes back to the smallest box. A new part always
+  opens on it.
+- Stock size, bounding box, weight, features and cycle time all follow the
+  orientation. A custom size you typed is kept.
+
+**AND / AMS standard extrusions.** The library holds 456 dies from the
+nine Army-Navy aeronautical standards for extruded aluminum shapes. SAE's
+AMS101xx standards replaced them with the same dash numbers, so the search
+finds a die by either number: `AMS10134-1205` is `AND10134-1205`.
+
+| Standard | Shape | Dies |
+|---|---|---|
+| AND10133 / AMS10133 | Angle, equal leg | 34 |
+| AND10134 / AMS10134 | Angle, unequal leg | 57 |
+| AND10135 / AMS10135 | Angle, bulb section | 17 |
+| AND10136 / AMS10136 | Tee | 62 |
+| AND10137 / AMS10137 | Channel | 107 |
+| AND10138 / AMS10138 | Zee, equal leg | 70 |
+| AND10139 / AMS10139 | Zee, unequal leg | 72 |
+| AND10140 / AMS10140 | I-section | 30 |
+| AND10141 / AMS10141 | Tee, bulb section | 7 |
+
+Stock volume and weight use the area the standard lists, which includes
+the radii. The drawn section has sharp corners. Each row was checked
+against the AND drawings posted on everyspec.com. AND10141's table is not
+posted, so its seven dies come from the Aircraft Extrusion Co. catalog
+(aircraftextrusion.com), with areas computed from the section. The AND
+drawings are cancelled: check a die against the current AMS revision before
+ordering.
+
+**Your own profiles (custom library).** Dies your shop or supplier makes
+that are in neither list go in `custom_extrusions.csv`, beside the launcher.
+With Extrusion selected, **Edit custom library** creates the file (with
+instructions and two example rows) and opens it in your editor for .csv
+files. Save it, then press **Reload**. The profiles appear first in the
+picker, under *Custom library*, and the search and the suggested profile use
+them too.
+
+- One row per profile: a name, a shape and its dimensions in inches. The
+  shapes and columns are those of the built-in lists, explained at the top
+  of the file.
+- `area_in2` is optional. Give the drawing's area and stock weight uses it;
+  leave it blank and the sharp-cornered section is used.
+- A row that cannot be used is skipped, and the panel says which line and
+  why. A typo never stops the tool. A name that is already a built-in
+  profile is refused, so a part number always means one die.
+- The file is yours. It is not overwritten, is kept out of git, and like
+  everything else the tool keeps, it lives in the tool folder. Copy it
+  between installs to share a library.
 
 - The profile is fitted to the part using its mesh. It is turned, flipped
   and slid within the part's section to the pose that holds the most of the
@@ -448,6 +517,10 @@ turned up bugs in the originals. These fixes are included.
   each row with its source URL.
 - `partestimator/machining/data/extrusions.csv`: the extrusion profiles
   offered as stock (see *Choosing the stock*).
+- `partestimator/machining/data/standard_extrusions.csv`: the AND / AMS
+  standard extrusions, one row per dash number, with each row's source.
+- `custom_extrusions.csv` (beside the launcher, created on first use): your
+  own extrusion profiles.
 - `partestimator/machining/data/shop_profile.csv`: machine limits, duty
   factors and calibration, including the new lathe settings.
 - `.\pe.ps1 classify a.step b.step` prints the classification from the

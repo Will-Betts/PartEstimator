@@ -32,11 +32,12 @@ from PySide6.QtWidgets import (
 )
 
 from partestimator.machining.geometry import cycle_time, derived, export, features, materials, rates, shop, step_io
+from partestimator.machining.geometry import orientation
 from partestimator.machining.geometry import stock as stock_mod
 from partestimator.machining.geometry.materials import MATERIALS
 from partestimator.machining.ui.proc_workers import AnalysisRunner
 from partestimator.machining.ui.stock_panel import StockControls
-from partestimator.machining.ui.viewer import PartViewer
+from partestimator.machining.ui.viewer import PartViewer, stock_box_extents
 from partestimator.ui_common import guard_wheel, material_picker
 
 # MATERIALS comes from geometry.materials so the dropdown and the density
@@ -326,6 +327,11 @@ class MainWindow(QMainWindow):
         layout.addRow(stock_title)
         self.stock_controls = StockControls()
         self.stock_controls.stockChanged.connect(self._on_stock_changed)
+        self.stock_controls.pickRequested.connect(self._on_pick_requested)
+        self.stock_controls.orientationChanged.connect(
+            lambda: self.viewer.clear_highlights("stock"))
+        self.stock_controls.btn_auto_orient.clicked.connect(
+            lambda: self.viewer.clear_highlights())
         layout.addRow(self.stock_controls)
 
         self.left_layout.addWidget(box)
@@ -1029,11 +1035,88 @@ class MainWindow(QMainWindow):
         if not self.results:
             return
         self.results["stock"] = stock
+        # The part may have been turned in its stock: the box everything
+        # else reads (labels, removal ratio, the 3D outline) turns with it.
+        rect = self.stock_controls.rect_box()
+        if rect is not None and rect is not self.results.get("rect_box"):
+            self.results["rect_box"] = rect
+            unit = self.display_unit
+            self._refresh_bounding_box_labels(
+                unit, "mm" if unit == "MM" else "in", "mm³" if unit == "MM" else "in³")
         self._refresh_feature_table()
         self._refresh_weight_labels()
         self._refresh_stock_labels()
         self._refresh_cycle_time()
         self._draw_overlays(fit=False)
+
+    # ------------------------------------------------------- orientation
+    def _on_pick_requested(self, mode: str):
+        """The stock panel wants a face clicked in the 3D view."""
+        self._pick_mode = mode
+        if not mode or not self.results:
+            self.viewer.set_click_handler(None)
+            self.viewer.set_picking_cursor(False)
+            if not mode:
+                self.statusBar().clearMessage()
+            return
+        if mode == "stock" and not (self.chk_show_box.isChecked()
+                                    or self.chk_show_stock.isChecked()):
+            self.chk_show_stock.setChecked(True)       # something to click on
+        self.viewer.set_click_handler(self._on_view_click)
+        self.viewer.set_picking_cursor(True)
+        self.statusBar().showMessage(
+            "Click a flat face of the part." if mode == "part"
+            else "Click a face of the stock box.")
+
+    def _part_face_labels(self):
+        """Which CAD face each triangle belongs to, worked out on the first
+        pick and kept for the part."""
+        tris = self.results["render_triangles"]
+        cached = getattr(self, "_face_labels", None)
+        if cached is None or cached[0] is not tris:
+            cached = (tris, orientation.face_labels(tris, len(self.results["render_points"])))
+            self._face_labels = cached
+        return cached[1]
+
+    def _on_view_click(self, x, y):
+        mode = getattr(self, "_pick_mode", "")
+        if not self.results or not mode:
+            return
+        if mode == "part":
+            tri = self.viewer.pick_part_triangle(x, y)
+            if tri is None:
+                self.statusBar().showMessage("That missed the part. Click a flat face of it.")
+                return
+            labels = self._part_face_labels()
+            face = orientation.planar_face(self.results["render_points"],
+                                           self.results["render_triangles"], labels, tri)
+            if face is None:
+                self.statusBar().showMessage("That face is curved. Click a flat face.")
+                return
+            self.viewer.highlight_triangles(np.flatnonzero(labels == labels[tri]), tag="part")
+            self.statusBar().clearMessage()
+            self.stock_controls.set_part_face(face[0])
+            return
+
+        rect = self.stock_controls.rect_box()
+        if rect is None:
+            return
+        origin, direction = self.viewer.pick_ray(x, y)
+        stock = self.results.get("stock")
+        extents = np.asarray(rect.extents_mm, dtype=float)
+        if (self.chk_show_stock.isChecked() and stock is not None
+                and stock.kind == "rectilinear"):
+            extents = stock_box_extents(stock, rect)
+        hit = orientation.ray_box_face(origin, direction, rect, extents)
+        if hit is None:
+            self.statusBar().showMessage("That missed the box. Click a face of the stock.")
+            return
+        k, sign = hit
+        self.viewer.highlight_quad(
+            orientation.box_face_corners(rect.center_mm, rect.axes, extents, k, sign),
+            tag="stock")
+        self.statusBar().clearMessage()
+        self.stock_controls.set_stock_face(k)
 
     def _on_material_changed(self, _text: str):
         if self.results:
@@ -1084,8 +1167,9 @@ class MainWindow(QMainWindow):
         if stock.is_extrusion:
             p = stock.profile
             self.lbl_stock_rule.setText(
-                f'Extrusion: {p.describe()}, section {p.area_in2:.3f} in² (sharp '
-                f'corners). OD/ST and W are the profile\'s outer envelope. '
+                f'Extrusion: {p.describe()}, section {p.area_in2:.3f} in² '
+                f'({"as listed in the standard" if p.listed_area_in2 else "sharp corners"}). '
+                f'OD/ST and W are the profile\'s outer envelope. '
                 f'L: minimum {stock.min_length_in:.3f}", recommended '
                 f'{stock.recommended_length_in:.3f}" (part + 1.00", rounded up to the '
                 f'next 1/4").')
