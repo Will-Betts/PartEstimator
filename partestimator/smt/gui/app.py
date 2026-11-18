@@ -104,6 +104,9 @@ class MainWindow(QMainWindow):
         self._stall.timeout.connect(self._warn_stalled)
 
         self._build_ui()
+        from partestimator.ui_common import guard_wheel
+
+        guard_wheel(self)
         self._set_busy(False)
         self._enable(False)
 
@@ -144,9 +147,8 @@ class MainWindow(QMainWindow):
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(6)
 
-        self.blank = BlankPanel()
-        rv.addWidget(self.blank)
-
+        # Inputs first, in one place, then the results -- the same order as
+        # the machining tab.
         self.controls = SimpleControls()
         self.controls.changed.connect(self._recompute)
         self.controls.rescan.connect(self._reopen)
@@ -156,6 +158,9 @@ class MainWindow(QMainWindow):
         self.advanced = AdvancedPanel()
         self.advanced.changed.connect(self._recompute)
         rv.addWidget(self.advanced)
+
+        self.blank = BlankPanel()
+        rv.addWidget(self.blank)
 
         self.tabs = QTabWidget()
         self.t_features = DetailTable()

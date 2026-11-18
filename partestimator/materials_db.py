@@ -125,3 +125,26 @@ def families() -> list[str]:
         if m.family not in seen:
             seen.append(m.family)
     return seen
+
+
+def token_match(query: str, text: str) -> bool:
+    """True when every word of `query` appears in `text`, ignoring case,
+    spaces and punctuation: "al 7075" matches "Aluminum 7075-T6"."""
+    hay = _squash(text)
+    words = [_squash(w) for w in query.replace("/", " ").replace("-", " ").split()]
+    return all(w in hay for w in words if w)
+
+
+def search_text(name: str) -> str:
+    """What a material is searchable by: its name, family, ISO group and old key."""
+    m = get(name)
+    if m is None:
+        return name
+    return " ".join((m.name, m.family, m.iso_group, m.legacy_key))
+
+
+def search(query: str, names: list[str] | None = None) -> list[str]:
+    """Materials whose name, family, ISO group or legacy key match every
+    word of `query`, in library order."""
+    pool = names if names is not None else [m.name for m in load()]
+    return [n for n in pool if token_match(query, search_text(n))]

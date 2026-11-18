@@ -120,6 +120,12 @@ def build_row(results: dict, derived_features: dict, material: str = "",
         "cycle_time_min": "",  # <- fill from your job records before training
     }
     row.update(estimate_columns(estimate))
+    stock = results.get("stock")
+    if stock is not None:
+        # Which stock the row was priced on: the rules, the bare part
+        # envelope, a size typed in, or a named extrusion profile.
+        row["stock_basis"] = stock.basis
+        row["stock_profile"] = stock.profile.describe() if stock.profile is not None else ""
     if quality:
         row.update(quality)
     row.update(derived_features)

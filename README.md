@@ -177,6 +177,13 @@ has the same name and density everywhere. Machining speeds and feeds are in
 `machining/data/machining_rates.csv` under the same names: ten values per
 material, five for milling and five for turning.
 
+**Picking a material.** Both tabs use the same picker: a **family** list
+(Aluminum, Steel, Stainless, ...) and then the **alloy** within it, so no
+list is longer than about fifteen entries. You can also type into the search
+box above them. Every word must match the name, family, ISO group or old
+short key, so `7075`, `stainless 304`, `inconel 718` and `CRS` all work.
+Press Enter to take the first match.
+
 | Family | Materials |
 |---|---|
 | Aluminum | 2024-T3, 2024-O\*, 2219-T87, 3003-H14, 5052-H32, 6061-T6, 6061-O\*, 6063-T5, 7050-T7451, 7075-T6, 7075-O\*, 7475-T7351, A356-T6 cast |
@@ -257,6 +264,60 @@ factor, bore threshold, part-off, turret and C-axis times, and lathe
 load/unload. The training CSV gains turning columns
 (`turned_area_fraction`, `turn_envelope_volume_in3`, …). Older rows stay
 aligned, because columns are matched by name.
+
+---
+
+## Choosing the stock
+
+The stock the part is cut from drives both roughing time and stock weight,
+and the NC programmer may not use what the rules recommend. **Stock** in the
+machining tab's **Part Inputs** sets it. The cycle time, stock weight, 3D
+overlay, feature row and export all follow it at once.
+
+| Stock type | What you set |
+|---|---|
+| **Plate / block** | Thickness, width, length |
+| **Round bar** | Diameter, length (needs the part's cylinder fit) |
+| **Extrusion profile** | A profile from the list, and its length |
+
+- A new part always opens on the **recommended** stock: the existing rules,
+  shown under *Stock Size*.
+- **Snap to minimum** gives the part's own bounding box, with no cleanup or
+  work-holding allowance. **Snap to recommended** goes back to the rules.
+- Typing any size makes it **custom**. Typing the recommended or minimum
+  numbers back in is recognised as such.
+- A stock too small to enclose the part is flagged in red.
+- The export records which was used, in `stock_basis` (`recommended`,
+  `minimum`, `custom` or `extrusion`) and `stock_profile`.
+- Roughing only ever removes what the stock holds (stock − part). For
+  stock that encloses the part's convex hull, which includes every
+  recommended size, the estimate is exactly as before.
+- With **Lathe** selected, turning is priced from a round bar: choose
+  **Round bar** to set its size. Other stock types show a warning.
+
+**Extrusions.** Pick a shape (angle, channel, I-beam, tee, rectangular or
+round tube, flat/square bar, hex bar), then a size. Typing in the search box
+also works, e.g. `angle 2 x 2`. When you switch to Extrusion, the tool
+suggests the profile that holds the part with the least material.
+
+- The profile is fitted to the part using its mesh. It is turned, flipped
+  and slid within the part's section to the pose that holds the most of the
+  part. It counts as holding the part when 98% of the part's vertices lie
+  inside its section, and the 3D view draws it in that pose.
+- It runs along whichever direction gives the shortest cut.
+- **Minimum length** is the part's length along the profile.
+  **Recommended length** is that plus 1.00", rounded up to the next 1/4"
+  (the same rule as L for plate).
+- The length is editable, and the two snap buttons set it to the minimum or
+  the recommended length.
+
+The profiles are in `partestimator/machining/data/extrusions.csv`: one row
+per size, with the shape and its nominal dimensions in inches (`a_in`,
+`b_in`, `t_in`, `t2_in`; the file's module docstring says which is which
+for each shape). Add the sizes your suppliers stock. A row with impossible
+dimensions stops the tool loading the file, so a typo cannot go unnoticed.
+Section areas are computed with **sharp corners**, so check the shipped
+sizes against your supplier's catalog.
 
 ---
 
@@ -345,6 +406,17 @@ turned up bugs in the originals. These fixes are included.
 
 ## Things you should know
 
+- **The mouse wheel never changes an input.** Over a dropdown, number box or
+  slider it scrolls the panel instead, so scrolling down the settings cannot
+  change a value by accident. Change inputs by clicking, typing or with the
+  arrow keys.
+- **Each tab keeps everything you enter in one place**, under *Part Inputs*
+  at the top of the left panel, with the results below it. In the machining
+  tab, the 3D display toggles moved to the bar under the viewer. When a new
+  part opens, its stock goes back to the recommended size and *Tapped holes*
+  goes back to *auto*. Material, finish, tolerance and operations carry
+  over.
+
 - **The machining tool still uses its separate analysis process** for loading
   (so a big part can't freeze the window, and Cancel works). The sheet metal
   tool works as before.
@@ -374,6 +446,8 @@ turned up bugs in the originals. These fixes are included.
 - `partestimator/data/materials.csv`: the shared material library.
 - `partestimator/machining/data/machining_rates.csv`: every speed and feed,
   each row with its source URL.
+- `partestimator/machining/data/extrusions.csv`: the extrusion profiles
+  offered as stock (see *Choosing the stock*).
 - `partestimator/machining/data/shop_profile.csv`: machine limits, duty
   factors and calibration, including the new lathe settings.
 - `.\pe.ps1 classify a.step b.step` prints the classification from the

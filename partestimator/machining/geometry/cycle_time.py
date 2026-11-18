@@ -413,15 +413,28 @@ def estimate_cycle_time(features: dict, results: dict, table,
         mrr_open = 0.0
     mrr_open /= cal_rough if cal_rough else 1.0
 
+    # The stock holds only (stock - part) of material to remove, whatever its
+    # shape. Pockets (hull - part) come out of that first and the rest is
+    # outside roughing. For stock that encloses the hull -- every recommended
+    # size -- this is exactly stock - hull and hull - part. It matters when
+    # the stock does not: a user-chosen size tighter than the hull, or an
+    # extrusion whose own section already leaves the concave regions open.
+    removable = max(stock_vol - part_vol, 0.0) if stock_vol > 0 else None
+    pocket_vol = max(hull_vol - part_vol, 0.0)
+    if removable is not None:
+        pocket_vol = min(pocket_vol, removable)
+
     # --- 1. outside roughing -------------------------------------------
-    outside_vol = max(stock_vol - hull_vol, 0.0)
+    outside_vol = max(removable - pocket_vol, 0.0) if removable is not None else 0.0
+    basis = ("stock − hull" if stock_vol + 1e-9 >= hull_vol
+             else "stock − part − pockets (stock is tighter than the hull)")
     if mrr_open > 0 and outside_vol > 0:
         est.terms.append(TimeTerm(
             name="Outside roughing", minutes=outside_vol / mrr_open,
             quantity=outside_vol, quantity_units="in³",
             rate=mrr_open, rate_units="in³/min",
             limited_by=bound,
-            detail=f"stock − hull = {outside_vol:,.2f} in³ at "
+            detail=f"{basis} = {outside_vol:,.2f} in³ at "
                    f"{mrr_open:,.2f} in³/min ({bound}-limited: {detail})"))
 
     # --- 2. pocket roughing --------------------------------------------
@@ -431,7 +444,6 @@ def estimate_cycle_time(features: dict, results: dict, table,
     # TIME reduction (helical entry at every level, corner slowdowns,
     # linking moves, retracts between stepdowns). Conflating them hides
     # which one is wrong when the estimate misses.
-    pocket_vol = max(hull_vol - part_vol, 0.0)
     engagement = p("pocket_engagement", POCKET_MRR_FRACTION) or POCKET_MRR_FRACTION
     duty_ratio = 1.0
     if profile:

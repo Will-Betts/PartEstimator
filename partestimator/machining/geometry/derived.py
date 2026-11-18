@@ -259,7 +259,13 @@ def compute_derived_features(results: dict, material: str = "") -> dict:
     if cyl is not None:
         out["removal_ratio_cyl"] = (float((cyl.volume_mm3 - volume) / cyl.volume_mm3)
                                      if cyl.volume_mm3 > 0 else 0.0)
-    out["stock_is_round"] = 1 if results.get("primary") == "cylindrical" else 0
+    # The stock actually chosen decides this, not just the best-fitting box:
+    # the programmer may put a prismatic part on bar, or a round one on plate.
+    if stock is not None:
+        out["stock_is_round"] = 1 if stock.is_round else 0
+    else:
+        out["stock_is_round"] = 1 if results.get("primary") == "cylindrical" else 0
+    out["stock_is_extrusion"] = 1 if (stock is not None and stock.is_extrusion) else 0
 
     # ------------------------------------------------------------- turning
     # How much of the part a lathe can generate. turned_area_fraction is

@@ -61,7 +61,7 @@ class SimpleControls(QWidget):
         super().__init__(parent)
         self._unit = None
 
-        box = QGroupBox("Settings")
+        box = QGroupBox("Part Inputs")
         form = QFormLayout(box)
         form.setLabelAlignment(Qt.AlignRight)
 
@@ -77,10 +77,9 @@ class SimpleControls(QWidget):
         self.units.currentTextChanged.connect(lambda _: self.changed.emit())
         form.addRow("Units", self.units)
 
-        self.material = QComboBox()
-        from partestimator.ui_common import fill_material_combo
+        from partestimator.ui_common import material_picker
 
-        fill_material_combo(self.material, list(MATERIALS))
+        self.material = material_picker(list(MATERIALS))
         self.material.setCurrentText(DEFAULT_MATERIAL)
         self.material.setToolTip(
             "Sets the K-factor curve, the density used for weight, the minimum "
