@@ -33,5 +33,5 @@ include = ["partestimator*"]
 # Python + numpy, so they run on a bare CI runner. The rest of tests/ needs
 # the CAD kernel and Qt; run it with `.\pe.ps1 test -Full` (or `pytest tests`
 # inside the full .venv).
-testpaths = ["tests/timing", "tests/test_cli.py", "tests/test_opengl.py"]
+testpaths = ["tests/timing", "tests/test_cli.py", "tests/test_opengl.py", "tests/test_stock.py"]
 addopts = "-ra"

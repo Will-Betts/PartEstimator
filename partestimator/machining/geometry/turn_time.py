@@ -123,7 +123,14 @@ def estimate_turning(features: dict, results: dict, table, material: str,
     allow = p("turn_finish_allowance_in", 0.015)
 
     # --- stock: round bar sized by the stock rules ------------------------
+    # ...unless the user chose a bar of their own (minimum or a custom size),
+    # in which case that is what gets turned down.
     bar = stock_mod.cylindrical_stock(tg.max_diameter_mm, tg.length_mm)
+    chosen = results.get("stock")
+    if (chosen is not None and chosen.is_round
+            and chosen.basis != stock_mod.RECOMMENDED
+            and chosen.thickness_or_diameter_in > 0):
+        bar = chosen
     r_stock = bar.thickness_or_diameter_in / 2.0
     z = tg.profile_z_mm
     r = tg.profile_r_mm / MM_PER_IN

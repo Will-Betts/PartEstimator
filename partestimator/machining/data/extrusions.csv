@@ -1,0 +1,45 @@
+shape,name,a_in,b_in,t_in,t2_in,notes
+angle,1 x 1 x 1/8,1,1,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+angle,1-1/2 x 1-1/2 x 1/8,1.5,1.5,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+angle,1-1/2 x 1-1/2 x 1/4,1.5,1.5,0.25,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+angle,2 x 2 x 1/8,2,2,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+angle,2 x 2 x 1/4,2,2,0.25,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+angle,3 x 3 x 1/4,3,3,0.25,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+angle,4 x 4 x 3/8,4,4,0.375,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+angle,2 x 1 x 1/8,2,1,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+angle,3 x 2 x 1/4,3,2,0.25,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+channel,2 x 1 x 1/8,2,1,0.125,0.125,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+channel,3 x 1-1/2 x 3/16,3,1.5,0.1875,0.1875,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+channel,4 x 2 x 1/4,4,2,0.25,0.25,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+i_beam,3 x 2 x 1/4,3,2,0.25,0.25,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+i_beam,4 x 3 x 1/4,4,3,0.25,0.25,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+tee,1-1/2 x 1-1/2 x 1/8,1.5,1.5,0.125,0.125,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+tee,2 x 2 x 1/4,2,2,0.25,0.25,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+rect_tube,1 x 1 x 1/8,1,1,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+rect_tube,1-1/2 x 1-1/2 x 1/8,1.5,1.5,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+rect_tube,2 x 2 x 1/8,2,2,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+rect_tube,2 x 1 x 1/8,2,1,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+rect_tube,3 x 2 x 1/8,3,2,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+rect_tube,4 x 2 x 1/4,4,2,0.25,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+rect_tube,4 x 4 x 1/4,4,4,0.25,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+round_tube,1 OD x 0.065 wall,1,,0.065,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+round_tube,1 OD x 0.125 wall,1,,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+round_tube,1-1/2 OD x 0.125 wall,1.5,,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+round_tube,2 OD x 0.125 wall,2,,0.125,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+round_tube,2 OD x 0.250 wall,2,,0.25,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+round_tube,3 OD x 0.250 wall,3,,0.25,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+round_tube,4 OD x 0.250 wall,4,,0.25,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+flat_bar,1 x 1/4,1,0.25,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+flat_bar,1 x 1/2,1,0.5,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+flat_bar,2 x 1/4,2,0.25,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+flat_bar,2 x 1/2,2,0.5,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+flat_bar,3 x 1/2,3,0.5,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+flat_bar,4 x 1/2,4,0.5,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+flat_bar,1 x 1 square,1,1,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+flat_bar,2 x 2 square,2,2,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+flat_bar,3 x 3 square,3,3,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+hex_bar,1/2 A/F,0.5,,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+hex_bar,3/4 A/F,0.75,,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+hex_bar,1 A/F,1,,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+hex_bar,1-1/2 A/F,1.5,,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.
+hex_bar,2 A/F,2,,,,Nominal size; area computed with sharp corners. Verify against your supplier's catalog.

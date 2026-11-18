@@ -269,6 +269,22 @@ class Behaviour(unittest.TestCase):
         big = run(prismatic_features(stock_volume_in3=60.0))
         self.assertGreater(big.door_to_door_minutes, small.door_to_door_minutes)
 
+    def test_stock_tighter_than_the_hull_removes_only_what_it_holds(self):
+        """Part 10, hull 20. Stock of 15 holds 5 in^3 to remove, not 10.
+
+        A user-chosen tight block or an extrusion can be smaller than the
+        part's convex hull; roughing must never exceed stock - part."""
+        est = run(prismatic_features(stock_volume_in3=15.0))
+        self.assertIsNone(term(est, "Outside roughing"))
+        self.assertAlmostEqual(term(est, "Pocket roughing").quantity, 5.0)
+        roomy = run(prismatic_features(stock_volume_in3=30.0))
+        self.assertLess(est.door_to_door_minutes, roomy.door_to_door_minutes)
+
+    def test_stock_exactly_the_part_removes_nothing(self):
+        est = run(prismatic_features(stock_volume_in3=10.0))
+        self.assertIsNone(term(est, "Outside roughing"))
+        self.assertIsNone(term(est, "Pocket roughing"))
+
     def test_unknown_material_returns_empty_estimate_with_warning(self):
         est = ct.estimate_cycle_time(prismatic_features(), {"holes": []}, make_table(),
                                      "Unobtainium", 125.0, "mill")

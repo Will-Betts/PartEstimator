@@ -404,7 +404,9 @@ class PartViewer:
         if stock is None:
             return
         mm_per_in = 25.4
-        if stock.kind == "rectilinear" and rect_box is not None:
+        if stock.kind == "extrusion" and stock.placement is not None:
+            self._add_stock_prism(stock)
+        elif stock.kind == "rectilinear" and rect_box is not None:
             # Match the box's own axes and centre, just larger. The extents
             # are sorted the same way stock.rectilinear_stock sorted them,
             # so each stock dimension lands on the right part axis.
@@ -423,6 +425,69 @@ class PartViewer:
                 stock.thickness_or_diameter_in * mm_per_in / 2.0,
                 stock.length_in * mm_per_in,
             )
+
+    def _add_stock_prism(self, stock, max_ribs: int = 12):
+        """An extrusion: its real section, swept along the chosen direction.
+
+        Same styling as the box and the bar -- translucent body, dashed
+        outline -- with the section outlined at both ends and a dashed rib
+        along each corner (every few points round a tube).
+        """
+        mm = 25.4
+        centre, d, u, v = (np.asarray(a, dtype=float) for a in stock.placement)
+        half = stock.length_in * mm / 2.0
+        loops = [np.asarray(lp, dtype=float) * mm for lp in stock.profile.outline_loops()]
+
+        def ring(loop, z):
+            return centre + loop[:, :1] * u + loop[:, 1:2] * v + z * d
+
+        points, faces = [], []
+        starts = []
+        for loop in loops:
+            n = len(loop)
+            base = sum(len(p) for p in points)
+            starts.append(base)
+            points.append(ring(loop, -half))
+            points.append(ring(loop, half))
+            for k in range(n):                       # side walls
+                k2 = (k + 1) % n
+                faces.append([4, base + k, base + k2, base + n + k2, base + n + k])
+        if len(loops) == 1:                          # solid section: two caps
+            n = len(loops[0])
+            faces.append([n] + list(range(n)))
+            faces.append([n] + list(range(n, 2 * n)))
+        else:                                        # tube: ring between the loops
+            n = len(loops[0])
+            o, i = starts[0], starts[1]
+            for end in (0, n):
+                for k in range(n):
+                    k2 = (k + 1) % n
+                    faces.append([4, o + end + k, o + end + k2, i + end + k2, i + end + k])
+        pts = np.vstack(points)
+        body = pv.PolyData(pts, np.hstack(faces).astype(np.int64))
+        actor = self.plotter.add_mesh(
+            body, color=STOCK_FILL_COLOR, opacity=STOCK_FILL_OPACITY, lighting=False,
+        )
+        self._overlay_actors.append(actor)
+
+        diagonal = float(np.linalg.norm(pts.max(axis=0) - pts.min(axis=0)))
+        period = max(diagonal * DASH_TARGET_LENGTH_FRACTION, 1e-6)
+        segments = []
+        for loop in loops:
+            a, b = ring(loop, -half), ring(loop, half)
+            n = len(loop)
+            for end in (a, b):
+                for k in range(n):
+                    segments.extend(_dash_segments(end[k], end[(k + 1) % n], period))
+            step = max(1, n // max_ribs)
+            for k in range(0, n, step):
+                segments.extend(_dash_segments(a[k], b[k], period))
+        if segments:
+            line_actor = _style_line_actor(self.plotter.add_mesh(
+                _dashed_polydata(segments), color=STOCK_LINE_COLOR,
+                line_width=BOX_LINE_WIDTH, lighting=False,
+            ))
+            self._overlay_actors.append(line_actor)
 
     def _add_stock_box(self, corners_mm: np.ndarray):
         corners = np.asarray(corners_mm, dtype=float)

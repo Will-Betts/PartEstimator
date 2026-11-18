@@ -35,7 +35,9 @@ from partestimator.machining.geometry import cycle_time, derived, export, featur
 from partestimator.machining.geometry import stock as stock_mod
 from partestimator.machining.geometry.materials import MATERIALS
 from partestimator.machining.ui.proc_workers import AnalysisRunner
+from partestimator.machining.ui.stock_panel import StockControls
 from partestimator.machining.ui.viewer import PartViewer
+from partestimator.ui_common import guard_wheel, material_picker
 
 # MATERIALS comes from geometry.materials so the dropdown and the density
 # table can't drift apart -- a material with no density would otherwise
@@ -74,6 +76,7 @@ class MainWindow(QMainWindow):
                 f"shop profile: {type(exc).__name__}: {exc}"
 
         self._build_ui()
+        guard_wheel(self)
 
         if self._rate_error:
             self.lbl_cycle_warnings.setText(
@@ -96,8 +99,9 @@ class MainWindow(QMainWindow):
         # and those handlers talk to the viewer.
         self.viewer = PartViewer(self)
 
+        # One work area for everything the user enters about the part, then
+        # the results below it, top to bottom.
         self._build_file_section()
-        self._build_display_section()
         self._build_input_section()
         self._build_basic_properties_section()
         self._build_bounding_box_section()
@@ -132,6 +136,9 @@ class MainWindow(QMainWindow):
         hint.setStyleSheet("color:#555; font-size:11px;")
         row.addWidget(hint)
         vb.addLayout(row)
+        # What to draw over the part: a viewing choice, not a part input, so
+        # it lives with the view buttons rather than in the input panel.
+        vb.addLayout(self._build_display_row())
         splitter.addWidget(view_box)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -180,13 +187,12 @@ class MainWindow(QMainWindow):
     def _analysis_options(self) -> dict:
         return dict(self.ANALYSIS_OPTIONS)
 
-    def _build_display_section(self):
-        """Only the three overlays worth toggling. Model edges are always on
-        (they're controlled by the extraction checkbox in Analysis) and the
-        tessellation wireframe is a diagnostic that stays off -- neither
+    def _build_display_row(self) -> QHBoxLayout:
+        """Only the overlays worth toggling. Model edges are always on and
+        the tessellation wireframe is a diagnostic that stays off -- neither
         needed a permanent control."""
-        box = QGroupBox("Display")
-        layout = QVBoxLayout(box)
+        layout = QHBoxLayout()
+        layout.addWidget(QLabel("Show:"))
 
         self.chk_show_box = QCheckBox("Bounding box")
         self.chk_show_box.setChecked(False)
@@ -222,21 +228,22 @@ class MainWindow(QMainWindow):
         )
         self.chk_show_com.toggled.connect(self._on_overlay_toggled)
         layout.addWidget(self.chk_show_com)
-
-        self.left_layout.addWidget(box)
+        layout.addStretch(1)
+        return layout
 
     def _on_overlay_toggled(self, _checked: bool):
         if self.results:
-            self._draw_overlays()
+            self._draw_overlays(fit=False)
 
     def _build_input_section(self):
+        """Every input about the part, in one place: material and process,
+        the quality targets, setups, and the stock it is cut from."""
         box = QGroupBox("Part Inputs")
+        box.setStyleSheet("QGroupBox { font-weight: bold; }"
+                          "QGroupBox * { font-weight: normal; }")
         layout = QFormLayout(box)
-        self.material_combo = QComboBox()
-        from partestimator.ui_common import fill_material_combo
-
-        fill_material_combo(self.material_combo,
-                            [m for m in MATERIALS if m != "Other"], ["Other"])
+        self.material_combo = material_picker(
+            [m for m in MATERIALS if m != "Other"], ["Other"])
         self.material_combo.currentTextChanged.connect(self._on_material_changed)
         layout.addRow("Material:", self.material_combo)
 
@@ -288,6 +295,39 @@ class MainWindow(QMainWindow):
 
         self.finish_value.valueChanged.connect(lambda _v: self._refresh_cycle_time())
 
+        # Setups cannot be inferred from the solid, and getting it wrong
+        # scales the whole estimate -- a two-op part estimated as one op
+        # is half the real door-to-door before any other error.
+        self.operations_spin = QSpinBox()
+        self.operations_spin.setRange(1, 12)
+        self.operations_spin.setValue(1)
+        self.operations_spin.setToolTip(
+            "Machine operations (setups) per part.\n"
+            "Tool changes and load/unload repeat per setup.")
+        self.operations_spin.valueChanged.connect(lambda _v: self._refresh_cycle_time())
+        layout.addRow("Operations:", self.operations_spin)
+
+        # STEP carries no thread data, so tapped holes are inferred from
+        # tap-drill diameters. -1 means "trust the detection".
+        self.tapped_spin = QSpinBox()
+        self.tapped_spin.setRange(-1, 999)
+        self.tapped_spin.setValue(-1)
+        self.tapped_spin.setSpecialValueText("auto (detect)")
+        self.tapped_spin.setToolTip(
+            "Number of tapped holes.\n"
+            "'auto' infers them from tap-drill diameters, which is a\n"
+            "heuristic — override it if the detected count is wrong.\n"
+            "Goes back to 'auto' when the next part opens.")
+        self.tapped_spin.valueChanged.connect(lambda _v: self._refresh_cycle_time())
+        layout.addRow("Tapped holes:", self.tapped_spin)
+
+        stock_title = QLabel("Stock")
+        stock_title.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        layout.addRow(stock_title)
+        self.stock_controls = StockControls()
+        self.stock_controls.stockChanged.connect(self._on_stock_changed)
+        layout.addRow(self.stock_controls)
+
         self.left_layout.addWidget(box)
 
     def _build_cycle_time_section(self):
@@ -304,33 +344,6 @@ class MainWindow(QMainWindow):
         self.lbl_cycle_total.setStyleSheet(
             "font-size: 17px; font-weight: bold; color: #1f4e79;")
         layout.addWidget(self.lbl_cycle_total)
-
-        inputs = QFormLayout()
-        # Setups cannot be inferred from the solid, and getting it wrong
-        # scales the whole estimate -- a two-op part estimated as one op
-        # is half the real door-to-door before any other error.
-        self.operations_spin = QSpinBox()
-        self.operations_spin.setRange(1, 12)
-        self.operations_spin.setValue(1)
-        self.operations_spin.setToolTip(
-            "Machine operations (setups) per part.\n"
-            "Tool changes and load/unload repeat per setup.")
-        self.operations_spin.valueChanged.connect(lambda _v: self._refresh_cycle_time())
-        inputs.addRow("Operations:", self.operations_spin)
-
-        # STEP carries no thread data, so tapped holes are inferred from
-        # tap-drill diameters. -1 means "trust the detection".
-        self.tapped_spin = QSpinBox()
-        self.tapped_spin.setRange(-1, 999)
-        self.tapped_spin.setValue(-1)
-        self.tapped_spin.setSpecialValueText("auto (detect)")
-        self.tapped_spin.setToolTip(
-            "Number of tapped holes.\n"
-            "'auto' infers them from tap-drill diameters, which is a\n"
-            "heuristic — override it if the detected count is wrong.")
-        self.tapped_spin.valueChanged.connect(lambda _v: self._refresh_cycle_time())
-        inputs.addRow("Tapped holes:", self.tapped_spin)
-        layout.addLayout(inputs)
 
         self.cycle_table = QTableWidget(0, 3)
         self.cycle_table.setHorizontalHeaderLabels(["Term", "Time", "Basis"])
@@ -456,8 +469,13 @@ class MainWindow(QMainWindow):
             self.cycle_table.setItem(r, 2, QTableWidgetItem(note))
         self.cycle_table.resizeColumnsToContents()
 
+        warnings = list(est.warnings)
+        stock = self.results.get("stock")
+        if self._current_removal_type() == "lathe" and stock is not None and not stock.is_round:
+            warnings.append("Lathe pricing turns a round bar sized from the part; the "
+                            "chosen stock is not used. Pick Round bar to set the bar.")
         self.lbl_cycle_warnings.setText(
-            "  ".join("⚠ " + w for w in est.warnings) if est.warnings else "")
+            "  ".join("⚠ " + w for w in warnings) if warnings else "")
 
     def _copy_cycle(self):
         est = self._current_estimate()
@@ -847,6 +865,19 @@ class MainWindow(QMainWindow):
 
         self.file_label.setText(Path(results["path"]).name)
         self._auto_removal_type(results)
+        # Part-specific inputs start fresh for each part; material, finish,
+        # tolerance and setups carry over, since a batch usually shares them.
+        self.tapped_spin.blockSignals(True)
+        self.tapped_spin.setValue(-1)
+        self.tapped_spin.blockSignals(False)
+        sp = results.get("shape_props")
+        stock = self.stock_controls.set_part(
+            results.get("rect_box"), results.get("cylinder"), results.get("primary"),
+            emit=False,
+            part_volume_in3=(sp.volume_mm3 / 25.4 ** 3) if sp is not None else None,
+            points_mm=results.get("render_points"))
+        if stock is not None:
+            results["stock"] = stock
         self.lbl_thin_wall.setText("Not run yet — this scan is opt-in since it can be slow on complex parts.")
 
         self.viewer.display_part(
@@ -921,7 +952,7 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     # ------------------------------------------------------------- display
-    def _draw_overlays(self):
+    def _draw_overlays(self, fit: bool = True):
         self.viewer.clear_overlays()
         rect_box = self.results["rect_box"]
         cyl = self.results["cylinder"]
@@ -945,7 +976,10 @@ class MainWindow(QMainWindow):
             points = np.array([p for p, _dist in thin_wall.worst_points_mm])
             self.viewer.show_thin_wall_points(points)
 
-        self.viewer.fit_all()
+        if fit:
+            self.viewer.fit_all()
+        else:
+            self.viewer.plotter.render()
 
     def _refresh_display(self):
         unit = self.display_unit
@@ -987,6 +1021,18 @@ class MainWindow(QMainWindow):
             self.lbl_stock_weight.setText("— (no density for this material)")
         else:
             self.lbl_stock_weight.setText("—")
+
+    def _on_stock_changed(self, stock):
+        """The user picked a different stock: everything that depends on it --
+        features, weight, cycle time and the overlay -- follows at once."""
+        if not self.results:
+            return
+        self.results["stock"] = stock
+        self._refresh_feature_table()
+        self._refresh_weight_labels()
+        self._refresh_stock_labels()
+        self._refresh_cycle_time()
+        self._draw_overlays(fit=False)
 
     def _on_material_changed(self, _text: str):
         if self.results:
@@ -1034,7 +1080,21 @@ class MainWindow(QMainWindow):
             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.stock_table.setItem(0, col, item)
 
-        if stock.is_round:
+        if stock.is_extrusion:
+            p = stock.profile
+            self.lbl_stock_rule.setText(
+                f'Extrusion: {p.describe()}, section {p.area_in2:.3f} in² (sharp '
+                f'corners). OD/ST and W are the profile\'s outer envelope. '
+                f'L: minimum {stock.min_length_in:.3f}", recommended '
+                f'{stock.recommended_length_in:.3f}" (part + 1.00", rounded up to the '
+                f'next 1/4").')
+        elif stock.basis == stock_mod.MINIMUM:
+            self.lbl_stock_rule.setText(
+                "Minimum: the part's own bounding box, with no cleanup or "
+                "work-holding allowance. Chosen in Part Inputs.")
+        elif stock.basis == stock_mod.CUSTOM:
+            self.lbl_stock_rule.setText("Custom size, entered in Part Inputs.")
+        elif stock.is_round:
             self.lbl_stock_rule.setText(
                 'Barstock. OD: part diameter + 0.125", rounded up to the next 1/4". '
                 'L: part length + 1.00", rounded up to the next 1/4". '
