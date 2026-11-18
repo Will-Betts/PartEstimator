@@ -296,5 +296,68 @@ class TestFittingToTheMesh(unittest.TestCase):
         self.assertAlmostEqual(frac, 0.5)
 
 
+def prism_mesh(loops_in, length_in):
+    """Triangle mesh (mm) of 2D loops (inches, in the YZ plane) swept along X
+    from -length/2 to +length/2. One loop: a solid prism with fan-capped ends.
+    Two loops of equal size: a tube with ring-capped ends."""
+    pts, tris = [], []
+    h = length_in / 2.0
+    rings = []
+    for loop in loops_in:
+        base = len(pts)
+        n = len(loop)
+        pts += [(-h * MM, y * MM, z * MM) for y, z in loop]
+        pts += [(h * MM, y * MM, z * MM) for y, z in loop]
+        rings.append((base, n))
+        for k in range(n):
+            k2 = (k + 1) % n
+            tris += [(base + k, base + k2, base + n + k2), (base + k, base + n + k2, base + n + k)]
+    if len(rings) == 1:
+        base, n = rings[0]
+        tris += [(base, base + k, base + k + 1) for k in range(1, n - 1)]
+        tris += [(base + n, base + n + k, base + n + k + 1) for k in range(1, n - 1)]
+    else:
+        (o, n), (i, _) = rings
+        for end in (0, n):
+            for k in range(n):
+                k2 = (k + 1) % n
+                tris += [(o + end + k, o + end + k2, i + end + k2), (o + end + k, i + end + k2, i + end + k)]
+    return pts, tris
+
+
+class TestSurfaceSampling(unittest.TestCase):
+    """Vertices alone sit only on a prism's end faces; the fit has to use the
+    whole surface."""
+
+    def test_a_hex_standoff_is_not_cut_from_a_channel(self):
+        hexbar = ex.ExtrusionProfile("1", "hex_bar", 1.0)
+        pts, tris = prism_mesh(hexbar.outline_loops(), 2.0)
+        b = SimpleNamespace(extents_mm=[2.0 * MM, 2 / 3 ** 0.5 * MM, 1.0 * MM],
+                            axes=[X, Y, Z], center_mm=[0.0, 0.0, 0.0])
+        samples = ex.surface_samples(pts, tris)
+        channel = ex.extrusion_stock(ex.find("channel", "2 x 1 x 1/8"), b, points_mm=samples)
+        self.assertFalse(channel.fits and channel.enough_material)
+        hexed = ex.extrusion_stock(ex.find("hex_bar", "1 A/F"), b, points_mm=samples)
+        self.assertTrue(hexed.fits and hexed.enough_material)
+        self.assertAlmostEqual(hexed.min_length_in, 2.0)
+
+    def test_a_tube_bushing_fits_its_tube_despite_a_generous_cylinder_fit(self):
+        tube = ex.find("round_tube", "2 OD x 0.250 wall")
+        pts, tris = prism_mesh(tube.outline_loops(), 1.5)
+        b = SimpleNamespace(extents_mm=[1.5 * MM, 2.0 * MM, 2.0 * MM],
+                            axes=[X, Y, Z], center_mm=[0.0, 0.0, 0.0])
+        fit = SimpleNamespace(radius_mm=2.018 / 2 * MM, height_mm=1.5 * MM,
+                              axis_direction=[1, 0, 0], axis_point_mm=[0, 0, 0])
+        s = ex.extrusion_stock(tube, b, fit, points_mm=ex.surface_samples(pts, tris))
+        self.assertTrue(s.fits and s.enough_material)
+        self.assertAlmostEqual(s.min_length_in, 1.5)
+
+    def test_sampling_is_repeatable(self):
+        pts, tris = prism_mesh([[(0, 0), (1, 0), (1, 1), (0, 1)]], 3.0)
+        a, b = ex.surface_samples(pts, tris), ex.surface_samples(pts, tris)
+        self.assertTrue((a == b).all())
+        self.assertEqual(len(a), len(pts) + ex.MAX_POINTS)
+
+
 if __name__ == "__main__":
     unittest.main()

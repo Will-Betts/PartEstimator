@@ -62,6 +62,7 @@ FIT_TOL_IN = 1e-3
 #: A profile may hold this much less than the part's volume and still pass:
 #: real sections carry root fillets the sharp-corner area does not count.
 VOLUME_SLACK = 0.05
+CYLINDER_FIT_SLACK = 0.01
 
 #: Shape key -> label shown in the picker, in display order.
 SHAPES = {
@@ -128,10 +129,18 @@ class ExtrusionProfile:
 
     # -- fitting -------------------------------------------------------
 
-    def fits_rect(self, c1: float, c2: float) -> bool:
+    def fits_rect(self, c1: float, c2: float, loose: bool = False) -> bool:
         """Does a c1 x c2 rectangle (inches, centred) fit inside the profile's
-        envelope, in either orientation?"""
+        envelope, in either orientation?
+
+        `loose` asks only whether the section box could fit at all, for when
+        the part's surface points will decide: a round part's box corners
+        stick out of a round tube that the part itself fits perfectly.
+        """
         tol = FIT_TOL_IN
+        if loose and self.shape in ("round_tube", "hex_bar"):
+            ex_, ey_ = self.envelope_in
+            return max(c1, c2) <= max(ex_, ey_) + tol and min(c1, c2) <= min(ex_, ey_) + tol
         if self.shape == "round_tube":
             return math.hypot(c1, c2) <= self.a + tol
         if self.shape == "hex_bar":
@@ -158,9 +167,11 @@ class ExtrusionProfile:
         return best
 
     def fits_circle(self, d: float) -> bool:
+        # The enclosing-cylinder fit runs about 1% large on a true cylinder.
+        tol = max(FIT_TOL_IN, CYLINDER_FIT_SLACK * d)
         if self.shape == "round_tube":
-            return d <= self.a + FIT_TOL_IN
-        return d <= min(self.envelope_in) + FIT_TOL_IN
+            return d <= self.a + tol
+        return d <= min(self.envelope_in) + tol
 
     # -- drawing -------------------------------------------------------
 
@@ -311,6 +322,7 @@ def find(shape: str, name: str) -> ExtrusionProfile | None:
 INSIDE_FRACTION = 0.98
 INSIDE_TOL_IN = 0.01
 MAX_POINTS = 1500
+COARSE_POINTS = 128
 
 
 @dataclass
@@ -381,20 +393,23 @@ def _orient(profile: ExtrusionProfile, cand: _Candidate, pts_mm: np.ndarray | No
         return cand
     loops = profile.outline_loops()
     rel = (pts_mm - cand.centre_mm) / MM_PER_INCH
+    # Screen every pose on a coarse subset, then measure only the best one
+    # on all the points: most poses are plainly wrong after a hundred.
+    coarse = rel[::max(1, len(rel) // COARSE_POINTS)]
     best = None
     for ua, va, cu, cv in pairs:
         for su in (1.0, -1.0):
             for sv in (1.0, -1.0):
                 u, v = su * ua, sv * va
-                px, py = rel @ u, rel @ v
+                cx, cy = coarse @ u, coarse @ v
                 for ou in _offsets((ex - cu) / 2.0):
                     for ov in _offsets((ey - cv) / 2.0):
-                        frac = _inside_fraction(loops, np.column_stack((px - ou, py - ov)))
+                        frac = _inside_fraction(loops, np.column_stack((cx - ou, cy - ov)))
                         if best is None or frac > best[0] + 1e-9:
                             best = (frac, u, v, ou, ov, (cu, cv))
-                        if frac >= 0.999:
-                            break
     frac, u, v, ou, ov, sec = best
+    if frac >= INSIDE_FRACTION - 0.05:
+        frac = _inside_fraction(loops, np.column_stack((rel @ u - ou, rel @ v - ov)))
     cand.u, cand.v, cand.section_in, cand.inside = u, v, sec, frac
     cand.centre_mm = cand.centre_mm + (ou * u + ov * v) * MM_PER_INCH
     return cand
@@ -412,8 +427,8 @@ def _candidates(profile: ExtrusionProfile, rect_box, cylinder,
             i, j = [m for m in range(3) if m != k]
             if ext[i] < ext[j]:
                 i, j = j, i
-            c = _Candidate(profile.fits_rect(ext[i], ext[j]), ext[k], centre.copy(),
-                           axes[k], axes[i], axes[j], (ext[i], ext[j]))
+            c = _Candidate(profile.fits_rect(ext[i], ext[j], loose=pts_mm is not None),
+                           ext[k], centre.copy(), axes[k], axes[i], axes[j], (ext[i], ext[j]))
             out.append(_orient(profile, c, pts_mm if c.fits else None,
                                axes[i], axes[j], ext[i], ext[j]))
     if cylinder is not None and profile.shape in ROUND_SHAPES:
@@ -427,7 +442,37 @@ def _candidates(profile: ExtrusionProfile, rect_box, cylinder,
     return out
 
 
-def _sample(points_mm, limit: int = MAX_POINTS) -> np.ndarray | None:
+def surface_samples(points_mm, triangles, n: int = MAX_POINTS, seed: int = 0):
+    """Points spread over the part's surface, weighted by triangle area, plus
+    every vertex.
+
+    Vertices alone are not enough: a prism's vertices all sit on its two end
+    faces, so seen across its length they cluster on two lines and can pass
+    for a channel's flanges. Sampling the side faces too closes that hole.
+    Seeded, so the same part always gives the same answer.
+    """
+    if points_mm is None:
+        return None
+    pts = np.asarray(points_mm, dtype=float).reshape(-1, 3)
+    if triangles is None or len(pts) == 0:
+        return pts
+    tri = np.asarray(triangles, dtype=np.int64).reshape(-1, 3)
+    if len(tri) == 0:
+        return pts
+    a, b, c = pts[tri[:, 0]], pts[tri[:, 1]], pts[tri[:, 2]]
+    area = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1)
+    if area.sum() <= 0:
+        return pts
+    rng = np.random.default_rng(seed)
+    pick = rng.choice(len(tri), size=n, p=area / area.sum())
+    r1, r2 = rng.random(n), rng.random(n)
+    flip = r1 + r2 > 1.0
+    r1[flip], r2[flip] = 1.0 - r1[flip], 1.0 - r2[flip]
+    samples = a[pick] + r1[:, None] * (b[pick] - a[pick]) + r2[:, None] * (c[pick] - a[pick])
+    return np.vstack((pts, samples))
+
+
+def _sample(points_mm, limit: int = 2 * MAX_POINTS) -> np.ndarray | None:
     if points_mm is None:
         return None
     pts = np.asarray(points_mm, dtype=float).reshape(-1, 3)

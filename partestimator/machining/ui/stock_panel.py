@@ -146,13 +146,13 @@ class StockControls(QWidget):
         return self._stock
 
     def set_part(self, rect_box, cylinder, primary: str, emit: bool = True,
-                 part_volume_in3: float | None = None, points_mm=None):
+                 part_volume_in3: float | None = None, points_mm=None, triangles=None):
         """A new part: back to the recommended stock of the best-fitting kind.
         `points_mm`, the part's mesh vertices, lets an extrusion profile be
         checked against the part's real section and turned to match it."""
         self._rect, self._cyl = rect_box, cylinder
         self._part_volume = part_volume_in3
-        self._points = ex._sample(points_mm)
+        self._points = ex._sample(ex.surface_samples(points_mm, triangles))
         self.setEnabled(rect_box is not None or cylinder is not None)
         round_ok = cylinder is not None
         self.type_combo.model().item(1).setEnabled(round_ok)

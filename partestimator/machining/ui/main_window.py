@@ -875,7 +875,8 @@ class MainWindow(QMainWindow):
             results.get("rect_box"), results.get("cylinder"), results.get("primary"),
             emit=False,
             part_volume_in3=(sp.volume_mm3 / 25.4 ** 3) if sp is not None else None,
-            points_mm=results.get("render_points"))
+            points_mm=results.get("render_points"),
+            triangles=results.get("render_triangles"))
         if stock is not None:
             results["stock"] = stock
         self.lbl_thin_wall.setText("Not run yet — this scan is opt-in since it can be slow on complex parts.")
