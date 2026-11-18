@@ -1,6 +1,6 @@
 # Part Estimator -- exact pins for the direct dependencies.
 #
-# Installed ONCE, into a .venv inside this folder, by "Run Part Estimator.bat".
+# Installed ONCE, into a .venv inside this folder, by `.\pe.ps1 setup`.
 # After that the tool makes no network connection of any kind.
 #
 # Every pin below was checked to have a prebuilt win_amd64 wheel for CPython

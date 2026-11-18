@@ -2,6 +2,9 @@
 # model and its data files). Deliberately light: no CAD kernel, no Qt, so it
 # installs in seconds and runs on any CI runner.
 #
+# In the full app environment:   .\pe.ps1 test    (installs this on first use)
+#
+# Or standalone, as CI does:
 #   python -m venv .venv-test
 #   .venv-test\Scripts\python -m pip install -r requirements-dev.txt
 #   .venv-test\Scripts\python -m pytest

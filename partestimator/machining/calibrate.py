@@ -8,7 +8,8 @@ that gap is to measure it, not to guess at it.
 
 USAGE
 
-    python calibrate.py training_table.csv
+    part-estimator calibrate training_table.csv
+    (or: .\\pe.ps1 calibrate training_table.csv)
 
 Point it at the CSV you have been exporting, with `cycle_time_min` filled
 in from job records on at least a few rows. It reports the gap and prints
@@ -160,10 +161,14 @@ def report(path: Path) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 1 or args[0] in ("-h", "--help"):
         print(__doc__)
-        print("\nERROR: name the CSV to read, e.g.\n")
-        print("    python calibrate.py training_table.csv")
-        sys.exit(1)
-    sys.exit(report(Path(sys.argv[1])))
+        print("\nUsage:  part-estimator calibrate training_table.csv")
+        return 0 if args and args[0] in ("-h", "--help") else 2
+    return report(Path(args[0]))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -13,9 +13,9 @@ from .config import UnfoldOptions
 from .materials import MATERIALS, load_deduction_table
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(prog: str = "smt-unfold") -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="smt-unfold",
+        prog=prog,
         description="Develop the flat pattern of an air-bent sheet metal STEP file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -78,8 +78,8 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def main(argv: list[str] | None = None, prog: str = "smt-unfold") -> int:
+    args = build_parser(prog).parse_args(argv)
 
     opts = UnfoldOptions(
         k_factor=args.k_factor,

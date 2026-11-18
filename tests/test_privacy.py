@@ -23,8 +23,7 @@ from pathlib import Path
 from partestimator.smt.diag import name_only, redact
 
 ROOT = Path(__file__).resolve().parent.parent
-LAUNCHER = "Run Part Estimator.bat"
-BATS = (LAUNCHER, "Run Self-Test.bat", "Calibrate To My Times.bat", "Reset Environment.bat")
+LAUNCHER = "pe.ps1"
 PKG = ROOT / "partestimator" / "smt"
 
 
@@ -173,57 +172,61 @@ class TestNothingIsWrittenOutsideTheToolFolder(unittest.TestCase):
         for bad in ("tempfile", "APPDATA", "expanduser", "winreg"):
             self.assertNotIn(bad, text, f"__main__.py reaches for {bad}")
 
-    def test_the_batch_launcher_keeps_pips_cache_inside_the_folder(self):
+    def test_the_launcher_keeps_pips_cache_inside_the_folder(self):
         """pip caches hundreds of megabytes in %LOCALAPPDATA% left alone."""
-        bat = (ROOT / LAUNCHER).read_text(encoding="ascii")
-        self.assertIn("PIP_CACHE_DIR", bat)
-        self.assertIn("TOOLDIR%\\scratch", bat)
+        ps1 = (ROOT / LAUNCHER).read_text(encoding="ascii")
+        self.assertIn("PIP_CACHE_DIR                 = (Join-Path $Scratch 'pip-cache')", ps1)
+        self.assertIn("$Scratch   = Join-Path $ToolDir 'scratch'", ps1)
 
-    def test_the_batch_launcher_disables_pips_version_check(self):
+    def test_the_launcher_disables_pips_version_check(self):
         """pip contacts PyPI on every run to see if a newer pip exists."""
-        bat = (ROOT / LAUNCHER).read_text(encoding="ascii")
-        self.assertIn("PIP_DISABLE_PIP_VERSION_CHECK", bat)
+        ps1 = (ROOT / LAUNCHER).read_text(encoding="ascii")
+        self.assertIn("PIP_DISABLE_PIP_VERSION_CHECK", ps1)
 
-    def test_the_batch_launcher_refuses_source_distributions(self):
-        """A sdist runs its own setup.py at install time. Wheels only."""
-        bat = (ROOT / LAUNCHER).read_text(encoding="ascii")
-        self.assertIn("--only-binary=:all:", bat)
+    def test_the_launcher_refuses_source_distributions(self):
+        """A sdist runs its own setup.py at install time. Wheels only, for
+        every install from requirements (the editable install of this
+        package itself is the only exception, and it uses --no-deps)."""
+        ps1 = (ROOT / LAUNCHER).read_text(encoding="ascii")
+        for line in ps1.splitlines():
+            if "Invoke-Pip @('install'" in line:
+                with self.subTest(line=line.strip()):
+                    if "'-r'" in line:
+                        self.assertIn("'--only-binary=:all:'", line)
+                    else:
+                        self.assertIn("'--no-deps'", line)
 
     def test_the_venv_is_inside_the_tool_folder(self):
-        bat = (ROOT / LAUNCHER).read_text(encoding="ascii")
-        self.assertIn('set "VENV=%TOOLDIR%\\.venv"', bat)
-        # Only executable lines. The comments explain that %LOCALAPPDATA% is
-        # deliberately avoided, and saying so must not fail the check.
-        for line in bat.splitlines():
-            stripped = line.strip().lower()
-            if stripped.startswith("rem") or stripped.startswith("echo"):
-                continue
-            self.assertNotIn(
-                "localappdata", stripped, f"launcher line uses it: {line}"
-            )
+        ps1 = (ROOT / LAUNCHER).read_text(encoding="ascii")
+        self.assertIn("$Venv      = Join-Path $ToolDir '.venv'", ps1)
+        # Only executable lines. The help block explains what is deliberately
+        # avoided, and saying so must not fail the check.
+        code = re.sub(r"<#.*?#>", "", ps1, flags=re.S)
+        for line in code.splitlines():
+            stripped = line.split("#", 1)[0].strip().lower()
+            for bad in ("localappdata", "appdata", "$env:temp", "$env:tmp", "userprofile"):
+                self.assertNotIn(bad, stripped, f"launcher line uses it: {line}")
 
 
 class TestLauncherIsWindowsSafe(unittest.TestCase):
-    def test_every_line_ends_crlf(self):
-        for name in BATS:
-            with self.subTest(name=name):
-                raw = (ROOT / name).read_bytes()
-                self.assertNotIn(
-                    b"\n", raw.replace(b"\r\n", b""),
-                    f"{name} has a bare LF; CMD mis-parses those",
-                )
-
-    def test_paths_are_quoted(self):
-        """This will live under C:\\Users\\First Last\\... sooner or later."""
-        bat = (ROOT / LAUNCHER).read_text(encoding="ascii")
-        for fragment in ('"%VPY%"', '"%VPYW%"', '"%VENV%"', '"%REQ%"', '"%LOCK%"'):
-            self.assertIn(fragment, bat, f"{fragment} is unquoted")
-
     def test_it_is_pure_ascii(self):
-        """CMD in a non-UTF-8 code page mangles anything else."""
-        for name in BATS:
-            with self.subTest(name=name):
-                (ROOT / name).read_bytes().decode("ascii")
+        """Windows PowerShell 5.1 reads a BOM-less script in the ANSI code
+        page and mangles anything else."""
+        (ROOT / LAUNCHER).read_bytes().decode("ascii")
+
+    def test_paths_are_literal(self):
+        """Paths go through -LiteralPath, so [brackets] in a folder name are
+        not treated as wildcards."""
+        ps1 = (ROOT / LAUNCHER).read_text(encoding="ascii")
+        for cmd in ("Test-Path", "Remove-Item", "Get-Content", "Set-Content"):
+            for m in re.finditer(rf"{cmd} (\S+)", ps1):
+                with self.subTest(call=m.group(0)):
+                    self.assertTrue(m.group(1).startswith("-LiteralPath")
+                                    or m.group(1).startswith("Env:"), m.group(0))
+
+    def test_the_batch_launchers_are_gone(self):
+        """One entry point; stale .bat files would drift from it."""
+        self.assertEqual(sorted(p.name for p in ROOT.glob("*.bat")), [])
 
 
 class TestDependenciesArePinnedExactly(unittest.TestCase):
