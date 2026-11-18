@@ -1,15 +1,17 @@
 """Small Qt helpers shared by both tools (imported lazily; Qt required).
 
-  HierarchicalPicker  family -> item selection with a keyword search box,
-                      used for materials and for extrusion profiles
-  material_picker()   a HierarchicalPicker filled from the material library
+  NestedPicker        one dropdown you can type in; its arrow opens a menu of
+                      groups, each with its items in a submenu (materials,
+                      extrusion profiles)
+  material_picker()   a NestedPicker filled from the material library
   guard_wheel()       stop the mouse wheel changing inputs as you scroll past
 """
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QEvent, QObject, QStringListModel, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QStringListModel, Qt, QTimer, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QAbstractSpinBox,
@@ -17,73 +19,94 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCompleter,
     QHBoxLayout,
-    QLineEdit,
+    QMenu,
     QSlider,
-    QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 #: (value, label shown in the item list)
 Item = tuple[str, str]
 
 
-class HierarchicalPicker(QWidget):
-    """Pick one value in two short steps -- a group, then an item in it --
-    or type a few words to search everything at once.
+class _MenuCombo(QComboBox):
+    """An editable combo whose arrow opens the owner's nested menu in place
+    of the usual flat list."""
 
-    Behaves like the QComboBox it replaces where callers need it to:
-    `currentText()`, `setCurrentText()` and `currentTextChanged(str)` all
-    deal in the full value (e.g. "Aluminum 6061-T6"), whatever short label
-    the item list shows.
+    def __init__(self, owner: NestedPicker):
+        super().__init__(owner)
+        self._owner = owner
+
+    def showPopup(self) -> None:  # noqa: N802 -- Qt override
+        self._owner.show_menu()
+
+
+class NestedPicker(QWidget):
+    """One dropdown for a two-level list, such as material family -> alloy.
+
+    Type in it to search everything ("7075", "stainless 304"): matches drop
+    down below as you type, and Enter takes the first. Click the arrow for a
+    menu of groups, each opening a submenu of its items. Typing while that
+    menu is open goes straight to the search.
+
+    Offers the same `currentText()`, `setCurrentText()` and
+    `currentTextChanged(str)` as a QComboBox, in full values (e.g.
+    "Aluminum 6061-T6"). The signal fires only when a value is picked, never
+    on a half-typed search.
+
+    `display` turns a value into the words shown for it in the box and the
+    search results, for values that are keys rather than names; each must
+    give a different text.
     """
 
     currentTextChanged = Signal(str)
 
+    MAX_MATCHES = 40
+
     def __init__(self, groups: list[tuple[str, list[Item]]],
                  matcher: Callable[[str, str], bool],
                  search_text: Callable[[str], str] | None = None,
-                 placeholder: str = "Search...", item_tooltips: bool = True,
+                 placeholder: str = "Type to search, or pick from the list",
+                 display: Callable[[str], str] | None = None,
                  parent=None):
         super().__init__(parent)
-        self._item_tooltips = item_tooltips
-        self._groups = [(g, list(items)) for g, items in groups if items]
         self._matcher = matcher
         self._search_text = search_text or (lambda v: v)
+        self._display = display or (lambda v: v)
+        self._value_of: dict[str, str] = {}     # shown text -> value
+        self._groups: list[tuple[str, list[Item]]] = []
+        self._group_of: dict[str, str] = {}
         self._value = ""
-        self._group_of = {v: g for g, items in self._groups for v, _ in items}
+        self.menu: QMenu | None = None
 
-        lay = QVBoxLayout(self)
+        lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(3)
 
-        self.search = QLineEdit()
-        self.search.setPlaceholderText(placeholder)
-        self.search.setClearButtonEnabled(True)
+        self.combo = _MenuCombo(self)
+        self.combo.setEditable(True)
+        self.combo.setInsertPolicy(QComboBox.NoInsert)
+        self.combo.setMinimumContentsLength(18)
+        self.combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        lay.addWidget(self.combo)
+
+        self.line = self.combo.lineEdit()
+        self.line.setPlaceholderText(placeholder)
         self._matches = QStringListModel(self)
         self._completer = QCompleter(self._matches, self)
         self._completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
         self._completer.setCaseSensitivity(Qt.CaseInsensitive)
         self._completer.setMaxVisibleItems(15)
-        self.search.setCompleter(self._completer)
-        self.search.textEdited.connect(self._on_search_edited)
-        self.search.returnPressed.connect(self._on_search_return)
+        self._completer.popup().setObjectName("completerPopup")
+        # On the line edit itself: QComboBox.setCompleter would also tie the
+        # completer to the combo's own (empty) item list.
+        self.line.setCompleter(self._completer)
+        self.line.textEdited.connect(self._on_search_edited)
+        self.line.returnPressed.connect(self._on_return)
+        self.line.editingFinished.connect(self._restore_text)
         self._completer.activated[str].connect(self._on_completion)
-        lay.addWidget(self.search)
+        self.line.installEventFilter(self)
 
-        row = QHBoxLayout()
-        row.setSpacing(4)
-        self.group_combo = QComboBox()
-        self.group_combo.addItems([g for g, _ in self._groups])
-        self.item_combo = QComboBox()
-        self.item_combo.setMaxVisibleItems(25)
-        row.addWidget(self.group_combo)
-        row.addWidget(self.item_combo, 1)
-        lay.addLayout(row)
-
-        self.group_combo.currentIndexChanged.connect(self._on_group_changed)
-        self.item_combo.currentIndexChanged.connect(self._on_item_changed)
-        self._fill_items(0)
-        self._on_item_changed(self.item_combo.currentIndex())
+        self.set_groups(groups)
 
     # -- combo-like API --------------------------------------------------
 
@@ -91,19 +114,25 @@ class HierarchicalPicker(QWidget):
         return self._value
 
     def setCurrentText(self, value: str) -> None:  # noqa: N802
-        group = self._group_of.get(value)
-        if group is None:
-            return
-        gi = [g for g, _ in self._groups].index(group)
-        if self.group_combo.currentIndex() != gi:
-            self.group_combo.blockSignals(True)
-            self.group_combo.setCurrentIndex(gi)
-            self.group_combo.blockSignals(False)
-            self._fill_items(gi)
-        ii = self.item_combo.findData(value)
-        if ii >= 0:
-            self.item_combo.setCurrentIndex(ii)
-            self._on_item_changed(ii)
+        if value in self._group_of:
+            self.commit(value)
+
+    def setToolTip(self, text: str) -> None:  # noqa: N802
+        super().setToolTip(text)
+        self.combo.setToolTip(text)
+
+    def set_groups(self, groups: list[tuple[str, list[Item]]]) -> None:
+        """Replace everything on offer, keeping the current value when it is
+        still there. When it is gone, the first item is taken, and
+        `currentTextChanged` says so."""
+        self._groups = [(g, list(items)) for g, items in groups if items]
+        self._group_of = {v: g for g, items in self._groups for v, _ in items}
+        self._value_of = {self._display(v): v for v in self._group_of}
+        values = self.values()
+        if self._value not in self._group_of and values:
+            self.commit(values[0])
+        else:
+            self._restore_text()
 
     def values(self) -> list[str]:
         return [v for _, items in self._groups for v, _ in items]
@@ -111,52 +140,126 @@ class HierarchicalPicker(QWidget):
     def matches(self, query: str) -> list[str]:
         return [v for v in self.values() if self._matcher(query, self._search_text(v))]
 
-    # -- internals -------------------------------------------------------
+    def group_of(self, value: str) -> str | None:
+        return self._group_of.get(value)
 
-    def _fill_items(self, group_index: int) -> None:
-        self.item_combo.blockSignals(True)
-        self.item_combo.clear()
-        if 0 <= group_index < len(self._groups):
-            for value, label in self._groups[group_index][1]:
-                self.item_combo.addItem(label, value)
-                if self._item_tooltips and label != value:
-                    self.item_combo.setItemData(self.item_combo.count() - 1, value,
-                                                Qt.ToolTipRole)
-        self.item_combo.blockSignals(False)
+    def display_text(self, value: str) -> str:
+        return self._display(value) if value else ""
 
-    def _on_group_changed(self, index: int) -> None:
-        self._fill_items(index)
-        self.item_combo.setCurrentIndex(0)
-        self._on_item_changed(0)
-
-    def _on_item_changed(self, index: int) -> None:
-        value = self.item_combo.itemData(index) if index >= 0 else None
-        if value and value != self._value:
-            self._value = value
+    def commit(self, value: str) -> None:
+        """Make `value` the current one, if it is on offer."""
+        if value not in self._group_of:
+            self._restore_text()
+            return
+        changed = value != self._value
+        self._value = value
+        self._matches.setStringList([])
+        self._completer.popup().hide()
+        self._restore_text()
+        if changed:
             self.currentTextChanged.emit(value)
 
-    def _on_search_edited(self, text: str) -> None:
-        self._matches.setStringList(self.matches(text) if text.strip() else [])
-        if text.strip():
-            self._completer.complete()
+    # -- the nested menu -------------------------------------------------
 
-    def _on_search_return(self) -> None:
-        found = self.matches(self.search.text())
-        if found:
-            self._on_completion(found[0])
+    def build_menu(self) -> QMenu:
+        """Groups, each a submenu of its items; the current item is ticked
+        and its group shown in bold."""
+        menu = QMenu(self)
+        menu.setMinimumWidth(self.combo.width())
+        current_group = self._group_of.get(self._value)
+        for group, items in self._groups:
+            if len(items) == 1 and items[0][1] == group:
+                parent = menu                   # e.g. "Other": no submenu of one
+            else:
+                parent = menu.addMenu(group)
+                parent.setToolTipsVisible(True)
+                if group == current_group:
+                    f = QFont(parent.menuAction().font())
+                    f.setBold(True)
+                    parent.menuAction().setFont(f)
+            for value, label in items:
+                act = parent.addAction(label)
+                act.setCheckable(True)
+                act.setChecked(value == self._value)
+                if label != self._display(value):
+                    act.setToolTip(self._display(value))
+                act.triggered.connect(lambda _=False, v=value: self.commit(v))
+        menu.installEventFilter(self)
+        return menu
 
-    def _on_completion(self, value: str) -> None:
-        if value in self._group_of:
-            self.setCurrentText(value)
-            # Leave the box empty for the next search; the combos now show
-            # what was picked.
-            self.search.clear()
+    def show_menu(self) -> None:
+        if self.menu is not None:
+            self.menu.close()
+        self.menu = self.build_menu()
+        self.menu.aboutToHide.connect(self._menu_closed)
+        self.menu.popup(self.combo.mapToGlobal(QPoint(0, self.combo.height())))
+
+    def _menu_closed(self) -> None:
+        menu, self.menu = self.menu, None
+        if menu is not None:
+            menu.deleteLater()
+
+    # -- typing ----------------------------------------------------------
+
+    def eventFilter(self, obj, event):  # noqa: N802 -- Qt override
+        et = event.type()
+        if isinstance(obj, QMenu) and et == QEvent.KeyPress:
+            # A letter or digit typed into the open menu starts a search.
+            text = event.text()
+            if text and text.isprintable() and not text.isspace():
+                obj.close()
+                self.line.setFocus(Qt.PopupFocusReason)
+                self.line.setText(text)
+                self._on_search_edited(text)
+                return True
+        elif obj is self.line and et == QEvent.FocusIn:
+            # Typing replaces what is there rather than adding to it.
+            QTimer.singleShot(0, self.line.selectAll)
+        elif obj is self.line and et == QEvent.KeyPress and event.key() == Qt.Key_Escape:
             self._matches.setStringList([])
+            self._completer.popup().hide()
+            self._restore_text()
+            self.line.selectAll()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _on_search_edited(self, text: str) -> None:
+        query = text.strip()
+        found = self.matches(query)[: self.MAX_MATCHES] if query else []
+        self._matches.setStringList([self._display(v) for v in found])
+        if found:
+            self._completer.setCompletionPrefix("")
+            self._completer.complete()
+        else:
+            self._completer.popup().hide()
+
+    def _on_completion(self, shown: str) -> None:
+        self.commit(self._value_of.get(shown, shown))
+
+    def _on_return(self) -> None:
+        text = self.line.text().strip()
+        if text in self._value_of:
+            self.commit(self._value_of[text])
+            return
+        found = self.matches(text) if text else []
+        self.commit(found[0] if found else self._value)
+
+    def _restore_text(self) -> None:
+        """Show the current value again, dropping any unfinished search."""
+        # editingFinished can arrive while the window is being torn down.
+        if not (isValid(self.line) and isValid(self._completer)):
+            return
+        if self._completer.popup().isVisible():
+            return
+        shown = self.display_text(self._value)
+        if self.line.text() != shown:
+            self.line.setText(shown)
+        self.line.setCursorPosition(0)
 
 
-def material_picker(names: list[str], extra: list[str] | None = None) -> HierarchicalPicker:
-    """Family, then alloy, with keyword search: "7075", "stainless 304",
-    "inconel", or an old short key such as "CRS"."""
+def material_picker(names: list[str], extra: list[str] | None = None) -> NestedPicker:
+    """One dropdown: type to search ("7075", "stainless 304", "inconel", or
+    an old short key such as "CRS"), or open it for family -> alloy menus."""
     from . import materials_db as db
 
     order = db.families()
@@ -171,11 +274,8 @@ def material_picker(names: list[str], extra: list[str] | None = None) -> Hierarc
     for n in extra or []:
         by_family.setdefault("Other", []).append((n, n))
     groups = [(f, by_family[f]) for f in by_family if by_family[f]]
-    picker = HierarchicalPicker(groups, db.token_match, db.search_text,
-                                placeholder="Search materials, e.g. 7075 or stainless 304")
-    picker.group_combo.setToolTip("Material family")
-    picker.item_combo.setToolTip("Alloy / grade within the family")
-    return picker
+    return NestedPicker(groups, db.token_match, db.search_text,
+                        placeholder="Type a material, e.g. 7075 or stainless 304")
 
 
 # ---------------------------------------------------------------------------

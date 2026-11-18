@@ -6,7 +6,10 @@ so this runs on the CI runner with the timing tests.
 from __future__ import annotations
 
 import math
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from partestimator.machining.geometry import extrusions as ex
@@ -133,9 +136,66 @@ class TestAreas(unittest.TestCase):
         for p in ex.load_profiles():
             loops = p.outline_loops()
             area = shoelace(loops[0]) - sum(shoelace(lp) for lp in loops[1:])
-            tol = 0.01 * p.area_in2 if p.shape == "round_tube" else 1e-9
+            tol = 0.01 * p.section_area_in2 if p.shape == "round_tube" else 1e-9
             with self.subTest(profile=p.describe()):
-                self.assertAlmostEqual(area, p.area_in2, delta=tol)
+                self.assertAlmostEqual(area, p.section_area_in2, delta=tol)
+
+    def test_new_shapes_against_hand_arithmetic(self):
+        zee = ex.ExtrusionProfile("z", "zee", 1.0, 0.75, 0.0625, c=0.5)
+        self.assertAlmostEqual(zee.section_area_in2,
+                               1.0 * 0.0625 + (0.75 - 0.0625) * 0.0625 + (0.5 - 0.0625) * 0.0625)
+        self.assertEqual(zee.envelope_in, (0.75 + 0.5 - 0.0625, 1.0))
+        # A bulb angle is the plain angle plus the part of the bulb off the leg.
+        a, b, t, r = 0.5, 0.5, 0.04, 0.06
+        bulb = ex.ExtrusionProfile("b", "bulb_angle", a, b, t, r=r).section_area_in2
+        d = r - t
+        under_leg = r * r * math.acos(d / r) - d * math.sqrt(r * r - d * d)
+        self.assertAlmostEqual(bulb, t * (a + b - t) + math.pi * r * r - under_leg, delta=2e-4)
+
+
+class TestStandardProfiles(unittest.TestCase):
+    """The AND / AMS library (standard_extrusions.csv)."""
+
+    def test_every_standard_loads(self):
+        std = ex.load_standard()
+        self.assertEqual({p.spec for p in std}, set(ex.STANDARDS))
+        self.assertGreater(len(std), 400)
+
+    def test_listed_areas_agree_with_the_dimensions(self):
+        """A mistyped dimension shows up as an area far from the listed one;
+        the standards' radii only move it a few percent."""
+        for p in ex.load_standard():
+            if not p.listed_area_in2:
+                continue
+            with self.subTest(profile=p.name):
+                self.assertAlmostEqual(p.section_area_in2, p.listed_area_in2,
+                                       delta=0.07 * p.listed_area_in2)
+
+    def test_part_number_lookup_either_standard(self):
+        p = ex.find_part_number("AND10134-1205")
+        self.assertEqual((p.shape, p.a, p.b, p.t), ("angle", 1.25, 1.0, 0.094))
+        self.assertAlmostEqual(p.area_in2, 0.202)       # the standard's own area
+        self.assertEqual(p.alias, "AMS10134-1205")
+        for text in ("AMS10134-1205", "ams 10134 1205", "AND10134 - 1205"):
+            self.assertIs(ex.find_part_number(text), p)
+        self.assertIsNone(ex.find_part_number("AND10134-9999"))
+        self.assertIsNone(ex.find_part_number("angle 2 x 2"))
+
+    def test_stock_volume_uses_the_listed_area(self):
+        p = ex.find_part_number("AND10137-2005")          # channel 2 x 1 x 1/8
+        s = ex.extrusion_stock(p, box(6.0, 1.9, 0.9), length_in=10.0)
+        self.assertAlmostEqual(s.volume_in3, 0.469 * 10.0)
+
+    def test_bulb_shapes_draw_inside_their_envelope(self):
+        for name in ("AND10135-1603", "AND10141-2002"):
+            p = ex.find_part_number(name)
+            ex_, ey = p.envelope_in
+            xs = [x for x, _ in p.outline_loops()[0]]
+            ys = [y for _, y in p.outline_loops()[0]]
+            with self.subTest(profile=name):
+                self.assertAlmostEqual(max(xs) - min(xs), ex_, places=6)
+                self.assertAlmostEqual(max(ys) - min(ys), ey, places=6)
+                self.assertAlmostEqual(max(xs), -min(xs), places=9)
 
 
 class TestShippedProfiles(unittest.TestCase):
@@ -357,6 +417,82 @@ class TestSurfaceSampling(unittest.TestCase):
         a, b = ex.surface_samples(pts, tris), ex.surface_samples(pts, tris)
         self.assertTrue((a == b).all())
         self.assertEqual(len(a), len(pts) + ex.MAX_POINTS)
+
+
+class TestCustomLibrary(unittest.TestCase):
+    """custom_extrusions.csv: the user's own dies, beside the launcher."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="custom_ex_"))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.path = self.dir / "custom_extrusions.csv"
+
+    def write(self, *lines: str) -> ex.CustomLibrary:
+        self.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return ex.read_custom(self.path)
+
+    def test_no_file_is_an_empty_library(self):
+        lib = ex.read_custom(self.path)
+        self.assertEqual((lib.profiles, lib.errors, lib.exists), ((), (), False))
+
+    def test_the_template_loads_clean_and_its_examples_work(self):
+        ex.ensure_custom_file(self.path)
+        lib = ex.read_custom(self.path)
+        self.assertEqual((lib.profiles, lib.errors), ((), ()))
+        # Uncommenting the examples is all it takes to use them.
+        text = self.path.read_text(encoding="utf-8")
+        text = text.replace("# ACME-2210", "ACME-2210").replace("# DIE-0457", "DIE-0457")
+        lib = self.write(text)
+        self.assertEqual([p.name for p in lib.profiles], ["ACME-2210", "DIE-0457"])
+        self.assertEqual(lib.errors, ())
+
+    def test_ensure_never_overwrites(self):
+        self.write("name,shape,a_in", "MINE,hex_bar,1")
+        ex.ensure_custom_file(self.path)
+        self.assertIn("MINE", self.path.read_text(encoding="utf-8"))
+
+    def test_rows_load_with_their_area(self):
+        lib = self.write(
+            "# my dies",
+            "name,shape,a_in,b_in,c_in,t_in,t2_in,r_in,area_in2,notes",
+            "ACME-1,angle,2,1.5,,0.125,,,0.430,from the drawing",
+            "ACME-2,zee,1.25,0.75,0.5,0.0625,,,,")
+        a, z = lib.profiles
+        self.assertTrue(a.custom and z.custom)
+        self.assertAlmostEqual(a.area_in2, 0.430)                  # as given
+        self.assertAlmostEqual(z.area_in2, z.section_area_in2)    # computed
+        self.assertIn("(custom)", a.describe())
+
+    def test_bad_rows_are_skipped_and_reported_not_raised(self):
+        lib = self.write(
+            "name,shape,a_in,b_in,t_in",
+            "GOOD,flat_bar,2,0.5,",
+            "TYPO,angle,2,1.5,abc",                # not a number
+            "THICK,rect_tube,1,1,0.6",             # wall too thick
+            "ODD,pentagon,1,,",                    # unknown shape
+            ",flat_bar,1,1,",                      # no name
+            "GOOD,flat_bar,3,0.5,",                # listed twice
+            "AND10134-1205,angle,1.25,1,0.094")    # shadows a built-in
+        self.assertEqual([p.name for p in lib.profiles], ["GOOD"])
+        self.assertEqual(len(lib.errors), 6)
+        self.assertTrue(lib.errors[0].startswith("line 3:"))
+        self.assertIn("built-in", lib.errors[-1])
+
+    def test_a_bad_header_is_reported(self):
+        lib = self.write("part,kind", "X,angle")
+        self.assertEqual(lib.profiles, ())
+        self.assertIn("name", lib.errors[0])
+
+    def test_offered_with_everything_else(self):
+        self.write("name,shape,a_in,b_in", "MY-BAR,flat_bar,0.95,0.95")
+        saved = ex.CUSTOM_PATH
+        ex.CUSTOM_PATH = self.path
+        self.addCleanup(lambda: (setattr(ex, "CUSTOM_PATH", saved), ex.custom_library(True)))
+        self.assertIn("MY-BAR", [p.name for p in ex.load_profiles()])
+        # The tightest solid bar for a 0.9 square part is now the user's own.
+        best = ex.best_profile(ex.load_profiles(), box(6.0, 0.9, 0.9),
+                               part_volume_in3=6.0 * 0.81)
+        self.assertEqual(best.name, "MY-BAR")
 
 
 if __name__ == "__main__":

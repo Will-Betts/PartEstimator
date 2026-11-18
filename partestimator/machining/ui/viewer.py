@@ -39,6 +39,8 @@ STOCK_FILL_COLOR = (0.55, 0.72, 0.96)   # translucent light-blue stock body
 STOCK_FILL_OPACITY = 0.18
 THIN_WALL_COLOR = (0.95, 0.05, 0.75)
 COM_COLOR = (0.90, 0.55, 0.05)  # amber center-of-mass marker
+PICK_COLOR = (0.10, 0.75, 0.35)  # green: a face picked to set the orientation
+CLICK_TOLERANCE_PX = 4           # further than this is a drag, not a click
 CAPTURED_AXIS_COLOR = (0.90, 0.08, 0.08)  # red axis through captured holes
 CAPTURED_AXIS_WIDTH = 3.0
 # How far the axis line pokes out past each end of the hole, as a fraction
@@ -108,6 +110,22 @@ def _style_line_actor(actor, depth_offset: bool = False):
         except Exception:  # noqa: BLE001
             pass
     return actor
+
+
+def stock_box_extents(stock, rect_box) -> np.ndarray:
+    """Plate stock's three sizes in mm, one per row of `rect_box.axes`.
+
+    The stock sits on the box's own axes and centre, just larger. Its sizes
+    are sorted the way stock.rectilinear_stock sorted them, so each lands on
+    the right part axis.
+    """
+    extents = np.asarray(rect_box.extents_mm, dtype=float)
+    order = np.argsort(extents)[::-1]          # largest -> smallest
+    stock_sorted = np.array([stock.length_in, stock.width_in or 0.0,
+                             stock.thickness_or_diameter_in]) * 25.4
+    out = np.empty(3, dtype=float)
+    out[order] = stock_sorted
+    return out
 
 
 def _cube_quad_faces() -> list[list[int]]:
@@ -216,6 +234,7 @@ class PartViewer:
         self._mesh_overlay_actor = None
         self._mesh = None
         self._edge_polylines = []
+        self._highlight_actors = []
 
     def clear_overlays(self):
         for actor in self._overlay_actors:
@@ -407,17 +426,8 @@ class PartViewer:
         if stock.kind == "extrusion" and stock.placement is not None:
             self._add_stock_prism(stock)
         elif stock.kind == "rectilinear" and rect_box is not None:
-            # Match the box's own axes and centre, just larger. The extents
-            # are sorted the same way stock.rectilinear_stock sorted them,
-            # so each stock dimension lands on the right part axis.
-            extents = np.asarray(rect_box.extents_mm, dtype=float)
-            order = np.argsort(extents)[::-1]          # largest -> smallest
-            stock_sorted = np.array([stock.length_in,
-                                      stock.width_in or 0.0,
-                                      stock.thickness_or_diameter_in]) * mm_per_in
-            stock_extents = np.empty(3, dtype=float)
-            stock_extents[order] = stock_sorted
-            corners = _box_corners(rect_box.center_mm, rect_box.axes, stock_extents)
+            corners = _box_corners(rect_box.center_mm, rect_box.axes,
+                                   stock_box_extents(stock, rect_box))
             self._add_stock_box(corners)
         elif cylinder is not None:
             self._add_stock_cylinder(
@@ -611,6 +621,116 @@ class PartViewer:
             cloud, color=THIN_WALL_COLOR, point_size=10, render_points_as_spheres=True,
         )
         self._overlay_actors.append(actor)
+
+    # ------------------------------------------------------------ picking
+    def set_click_handler(self, handler) -> None:
+        """Call `handler(x, y)` with display coordinates on a plain left
+        click -- one that did not drag to turn the view. None stops it."""
+        self._click_handler = handler
+        if getattr(self, "_click_observers", False):
+            return
+        try:
+            self.plotter.iren.add_observer("LeftButtonPressEvent", self._on_press)
+            self.plotter.iren.add_observer("LeftButtonReleaseEvent", self._on_release)
+            self._click_observers = True
+        except Exception:  # noqa: BLE001 -- no interactor (e.g. a test stub)
+            pass
+
+    def _on_press(self, *_args) -> None:
+        try:
+            self._press = tuple(self.plotter.iren.get_event_position())
+        except Exception:  # noqa: BLE001
+            self._press = None
+
+    def _on_release(self, *_args) -> None:
+        handler = getattr(self, "_click_handler", None)
+        press = getattr(self, "_press", None)
+        if handler is None or press is None:
+            return
+        try:
+            x, y = self.plotter.iren.get_event_position()
+        except Exception:  # noqa: BLE001
+            return
+        if abs(x - press[0]) > CLICK_TOLERANCE_PX or abs(y - press[1]) > CLICK_TOLERANCE_PX:
+            return
+        handler(x, y)
+
+    def pick_part_triangle(self, x, y):
+        """Index into the part's triangles of the one under (x, y), or None."""
+        import vtk
+
+        if self._mesh is None or self._part_actor is None:
+            return None
+        picker = vtk.vtkCellPicker()
+        picker.SetTolerance(0.0005)
+        picker.PickFromListOn()
+        picker.AddPickList(self._part_actor)
+        if not picker.Pick(x, y, 0, self.plotter.renderer):
+            return None
+        # The actor draws a copy of the mesh split at sharp edges, so map
+        # back through the picked point rather than trusting its cell id.
+        cid = self._mesh.find_closest_cell(np.asarray(picker.GetPickPosition(), dtype=float))
+        return int(cid) if cid is not None and cid >= 0 else None
+
+    def pick_ray(self, x, y):
+        """(origin, direction) in world space of the line of sight at (x, y)."""
+        ren = self.plotter.renderer
+        ends = []
+        for z in (0.0, 1.0):
+            ren.SetDisplayPoint(float(x), float(y), z)
+            ren.DisplayToWorld()
+            w = ren.GetWorldPoint()
+            ends.append(np.array(w[:3], dtype=float) / (w[3] or 1.0))
+        return ends[0], ends[1] - ends[0]
+
+    def set_picking_cursor(self, on: bool) -> None:
+        from PySide6.QtCore import Qt
+
+        if on:
+            self.plotter.setCursor(Qt.CrossCursor)
+        else:
+            self.plotter.unsetCursor()
+
+    def clear_highlights(self, tag: str | None = None) -> None:
+        """Remove the picked-face colouring: one kind ("part", "stock") or all."""
+        kept = []
+        for t, actor in getattr(self, "_highlight_actors", []):
+            if tag is None or t == tag:
+                self.plotter.remove_actor(actor)
+            else:
+                kept.append((t, actor))
+        self._highlight_actors = kept
+        self.plotter.render()
+
+    def highlight_triangles(self, triangle_indices, tag: str = "part") -> None:
+        """Colour a picked face of the part (replacing any earlier one)."""
+        self.clear_highlights(tag)
+        if self._mesh is None:
+            return
+        idx = np.asarray(triangle_indices, dtype=np.int64)
+        if len(idx) == 0:
+            return
+        face = self._mesh.extract_cells(idx)
+        actor = self.plotter.add_mesh(face, color=PICK_COLOR, lighting=False,
+                                      opacity=0.85)
+        try:
+            # Drawn on the face itself, so pull it toward the camera to win
+            # the depth test against the surface underneath.
+            mapper = actor.GetMapper()
+            mapper.SetResolveCoincidentTopologyToPolygonOffset()
+            mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2.0, -4.0)
+        except Exception:  # noqa: BLE001
+            pass
+        self._highlight_actors = getattr(self, "_highlight_actors", []) + [(tag, actor)]
+        self.plotter.render()
+
+    def highlight_quad(self, corners_mm, tag: str = "stock") -> None:
+        """Colour one face of the stock box: four corners in drawing order."""
+        self.clear_highlights(tag)
+        quad = pv.PolyData(np.asarray(corners_mm, dtype=float), faces=[4, 0, 1, 2, 3])
+        actor = self.plotter.add_mesh(quad, color=PICK_COLOR, opacity=0.45, lighting=False)
+        self._highlight_actors = getattr(self, "_highlight_actors", []) + [(tag, actor)]
+        self.plotter.render()
 
     def fit_all(self):
         """Fits the camera to the current scene and locks it to a true

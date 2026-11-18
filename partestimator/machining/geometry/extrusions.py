@@ -18,6 +18,26 @@ Cross-section area is computed from those dimensions with SHARP corners:
 real extrusions have root and toe radii that add or remove a few percent.
 Add rows freely; the loader rejects a row whose dimensions are impossible.
 
+STANDARD PROFILES. `machining/data/standard_extrusions.csv` holds the
+aerospace extrusion standards, one row per die (dash number), picked by part
+number such as AND10134-1205. The cancelled AND101xx drawings and the SAE
+AMS101xx standards that replaced them share the same dash numbers, so
+AMS10134-1205 finds the same row. Columns `a_in` ... `r_in` map onto the
+same fields as above, plus three shapes only the standards use:
+
+  shape        a                b                c              t      t2      r
+  -----------  ---------------  ---------------  -------------  -----  ------  -----------
+  zee          web height       bottom flange    top flange     thick.
+  bulb_angle   leg with bulb    plain leg                       thick.         bulb radius
+  bulb_tee     flange width     overall height                  stem   flange  bulb radius
+
+`r_in` is the root fillet on the other shapes, kept for reference only.
+`area_in2` is the area the standard lists (radii included); it is the area
+used for stock volume and weight when given, and the outline is drawn with
+sharp corners. Every row was checked against the drawings published by
+everyspec.com; AND10141's table is not posted there and its rows come from
+the aircraftextrusion.com catalog.
+
 FITTING. Which way the profile runs along the part is chosen automatically:
 every axis of the part's bounding box is tried as the extrusion direction
 (and, for round profiles, the axis of the enclosing cylinder), and of those
@@ -48,6 +68,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -57,6 +78,7 @@ import numpy as np
 from . import stock as stock_mod
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "extrusions.csv"
+STANDARD_PATH = Path(__file__).resolve().parents[1] / "data" / "standard_extrusions.csv"
 MM_PER_INCH = stock_mod.MM_PER_INCH
 FIT_TOL_IN = 1e-3
 #: A profile may hold this much less than the part's volume and still pass:
@@ -74,9 +96,38 @@ SHAPES = {
     "round_tube": "Round tube",
     "flat_bar": "Flat / square bar",
     "hex_bar": "Hex bar",
+    "zee": "Zee",
+    "bulb_angle": "Bulb angle",
+    "bulb_tee": "Bulb tee",
 }
 ROUND_SHAPES = ("round_tube",)
+#: Shapes whose area is measured off the drawn outline (they have arcs).
+BULB_SHAPES = ("bulb_angle", "bulb_tee")
 CIRCLE_SEGMENTS = 48
+BULB_SEGMENTS = 64     # per full circle: the drawn bulb is within 0.2% of a true one
+
+#: Standard -> what it covers. AMS101xx (SAE) replaced AND101xx with the
+#: same dash numbers.
+STANDARDS = {
+    "AND10133": "Angle, equal leg",
+    "AND10134": "Angle, unequal leg",
+    "AND10135": "Angle, bulb section",
+    "AND10136": "Tee",
+    "AND10137": "Channel",
+    "AND10138": "Zee, equal leg",
+    "AND10139": "Zee, unequal leg",
+    "AND10140": "I-section",
+    "AND10141": "Tee, bulb section",
+}
+
+
+def ams_name(spec: str) -> str:
+    """AND10134 -> AMS10134, the SAE standard that superseded it."""
+    return "AMS" + spec[3:] if spec.upper().startswith("AND") else spec
+
+
+def _fmt(x: float) -> str:
+    return f"{x:.3f}"
 
 
 @dataclass(frozen=True)
@@ -88,15 +139,60 @@ class ExtrusionProfile:
     t: float = 0.0
     t2: float = 0.0
     notes: str = ""
+    c: float = 0.0                 # zee: top flange
+    r: float = 0.0                 # bulb shapes: bulb radius
+    spec: str = ""                 # "AND10134" for a standard profile, else ""
+    listed_area_in2: float = 0.0   # the standard's own area, radii included
+    custom: bool = False           # from the user's own custom_extrusions.csv
 
     @property
     def shape_label(self) -> str:
         return SHAPES.get(self.shape, self.shape)
 
     @property
+    def is_standard(self) -> bool:
+        return bool(self.spec)
+
+    @property
+    def alias(self) -> str:
+        """The same die under the SAE number: AND10134-1205 -> AMS10134-1205."""
+        return ams_name(self.name) if self.is_standard else ""
+
+    @property
+    def size_text(self) -> str:
+        """Nominal size in the standard's own terms, inches."""
+        s, f = self.shape, _fmt
+        if s in ("zee",):
+            return f"{f(self.a)} x {f(self.b)} x {f(self.c)} x {f(self.t)}"
+        if s == "bulb_angle":
+            return f"{f(self.a)} x {f(self.b)} x {f(self.t)}, R{f(self.r)} bulb"
+        if s == "bulb_tee":
+            return (f"{f(self.a)} x {f(self.b)}, flange {f(self.t2)}, stem {f(self.t)}, "
+                    f"{f(2 * self.r)} bulb")
+        if s in ("round_tube",):
+            return f"{f(self.a)} OD x {f(self.t)} wall"
+        if s in ("flat_bar",):
+            return f"{f(self.a)} x {f(self.b)}"
+        if s in ("hex_bar",):
+            return f"{f(self.a)} A/F"
+        return f"{f(self.a)} x {f(self.b)} x {f(self.t)}"
+
+    @property
     def area_in2(self) -> float:
+        """Section area for stock volume: the standard's listed area when
+        there is one, else the sharp-cornered area of the drawn section."""
+        return self.listed_area_in2 or self.section_area_in2
+
+    @property
+    def section_area_in2(self) -> float:
+        """Area of the section exactly as `outline_loops()` draws it."""
         a, b, t, t2 = self.a, self.b, self.t, self.t2
         s = self.shape
+        if s == "zee":
+            return t * (a + self.b + self.c - 2.0 * t)
+        if s in BULB_SHAPES:
+            loops = self.outline_loops()
+            return _shoelace(loops[0]) - sum(_shoelace(lp) for lp in loops[1:])
         if s == "angle":
             return t * (a + b - t)
         if s == "channel":
@@ -122,9 +218,18 @@ class ExtrusionProfile:
             return (self.a, self.a)
         if self.shape == "hex_bar":
             return (2.0 * self.a / math.sqrt(3.0), self.a)   # corners on x
+        if self.shape == "zee":
+            return (self.b + self.c - self.t, self.a)
+        if self.shape == "bulb_angle":
+            return (self.a, max(self.b, 2.0 * self.r))
         return (self.a, self.b)
 
     def describe(self) -> str:
+        if self.custom:
+            return f"{self.name} (custom) {self.shape_label} {self.size_text}"
+        if self.is_standard:
+            title = STANDARDS.get(self.spec, self.shape_label)
+            return f"{self.name} ({self.alias}) {title} {self.size_text}"
         return f"{self.shape_label} {self.name}"
 
     # -- fitting -------------------------------------------------------
@@ -206,6 +311,16 @@ class ExtrusionProfile:
             r = a / math.sqrt(3.0)
             return [[(r * math.cos(k * math.pi / 3.0), r * math.sin(k * math.pi / 3.0))
                      for k in range(6)]]
+        if s == "zee":
+            # Web up the middle, bottom flange to +x, top flange to -x.
+            c = self.c
+            pts = [(0.0, 0.0), (b, 0.0), (b, t), (t, t), (t, a), (t - c, a),
+                   (t - c, a - t), (0.0, a - t)]
+            return [_centred(pts)]
+        if s == "bulb_angle":
+            return [_centred(_bulb_angle(a, b, t, self.r))]
+        if s == "bulb_tee":
+            return [_centred(_bulb_tee(a, b, t, t2, self.r))]
         raise ValueError(f"unknown extrusion shape {s!r}")
 
 
@@ -257,6 +372,50 @@ def _circle(r: float) -> list[tuple[float, float]]:
              r * math.sin(2 * math.pi * k / CIRCLE_SEGMENTS)) for k in range(CIRCLE_SEGMENTS)]
 
 
+def _centred(pts) -> list[tuple[float, float]]:
+    """Shift an outline so its bounding box is centred on the origin."""
+    xs, ys = [x for x, _ in pts], [y for _, y in pts]
+    cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+    return [(x - cx, y - cy) for x, y in pts]
+
+
+def _arc(cx, cy, r, start, end, segments: int = BULB_SEGMENTS):
+    """Points along a circle from angle `start` to `end` (radians, CCW,
+    end > start), both ends included, and every quarter point between so
+    the drawn bulb reaches the envelope exactly."""
+    n = max(2, int(math.ceil(segments * (end - start) / (2.0 * math.pi))))
+    angles = {start + (end - start) * k / n for k in range(n + 1)}
+    q = math.ceil(start / (math.pi / 2.0))
+    while q * math.pi / 2.0 < end:
+        angles.add(q * math.pi / 2.0)
+        q += 1
+    return [(cx + r * math.cos(th), cy + r * math.sin(th)) for th in sorted(angles)]
+
+
+def _bulb_angle(a, b, t, r):
+    """AND10135: the A leg along +x with a round bulb of radius r on its
+    inner face at the toe, tangent to the toe and the leg's outer face.
+    Heel at the origin, B leg up +y."""
+    cx, cy = a - r, r
+    # The leg runs square to the toe; the bulb rises off its inner face
+    # (y = t), crossing it on the toe side and again on the heel side.
+    half = math.asin((r - t) / r)
+    return ([(0.0, 0.0), (a, 0.0), (a, t)] + _arc(cx, cy, r, -half, math.pi + half)
+            + [(t, t), (t, b), (0.0, b)])
+
+
+def _bulb_tee(a, b, t, t2, r):
+    """AND10141: flange across the top, stem down the middle, and a round
+    bulb of radius r on the stem's tip, flush with the stem's +x face."""
+    ht = t / 2.0
+    cx, cy = ht - r, r
+    # The stem's -x face meets the bulb on its upper side.
+    start = math.acos((r - t) / r)
+    return ([(ht, r), (ht, b - t2), (a / 2.0, b - t2), (a / 2.0, b), (-a / 2.0, b),
+             (-a / 2.0, b - t2), (-ht, b - t2)]
+            + _arc(cx, cy, r, start, 2.0 * math.pi)[:-1])
+
+
 def validate(p: ExtrusionProfile) -> None:
     """Raise ValueError if the dimensions cannot describe a real section."""
     if p.shape not in SHAPES:
@@ -266,10 +425,15 @@ def validate(p: ExtrusionProfile) -> None:
     needs_b = p.shape not in ("round_tube", "hex_bar")
     if needs_b and p.b <= 0:
         raise ValueError(f"{p.name}: b must be positive")
-    if p.shape in ("angle", "channel", "i_beam", "tee", "rect_tube", "round_tube") and p.t <= 0:
+    if p.shape in ("angle", "channel", "i_beam", "tee", "rect_tube", "round_tube",
+                   "zee", "bulb_angle", "bulb_tee") and p.t <= 0:
         raise ValueError(f"{p.name}: t must be positive")
-    if p.shape in ("channel", "i_beam", "tee") and p.t2 <= 0:
+    if p.shape in ("channel", "i_beam", "tee", "bulb_tee") and p.t2 <= 0:
         raise ValueError(f"{p.name}: t2 must be positive")
+    if p.shape == "zee" and p.c <= 0:
+        raise ValueError(f"{p.name}: c must be positive")
+    if p.shape in BULB_SHAPES and p.r <= 0:
+        raise ValueError(f"{p.name}: r (bulb radius) must be positive")
     checks = {
         "angle": p.t < min(p.a, p.b),
         "channel": p.t < p.b and 2 * p.t2 < p.a,
@@ -277,6 +441,11 @@ def validate(p: ExtrusionProfile) -> None:
         "tee": p.t < p.a and p.t2 < p.b,
         "rect_tube": 2 * p.t < min(p.a, p.b),
         "round_tube": 2 * p.t < p.a,
+        "zee": p.t < min(p.b, p.c) and 2 * p.t < p.a,
+        # The bulb is thicker than the leg and clear of the other leg.
+        "bulb_angle": p.t < 2 * p.r and p.t < p.b and p.t + 2 * p.r < p.a,
+        "bulb_tee": (p.t < 2 * p.r and p.t2 + 2 * p.r < p.b
+                     and 2 * p.r - p.t / 2 <= p.a / 2),
     }
     if not checks.get(p.shape, True):
         raise ValueError(f"{p.name}: wall or flange is too thick for the section")
@@ -288,7 +457,8 @@ def _num(v) -> float:
 
 
 @lru_cache(maxsize=4)
-def load_profiles(path: str | None = None) -> tuple[ExtrusionProfile, ...]:
+def load_catalog(path: str | None = None) -> tuple[ExtrusionProfile, ...]:
+    """The general catalog: nominal commercial sizes, by shape."""
     p = Path(path) if path else DATA_PATH
     out = []
     with p.open("r", newline="", encoding="utf-8") as fh:
@@ -308,8 +478,174 @@ def load_profiles(path: str | None = None) -> tuple[ExtrusionProfile, ...]:
     return tuple(out)
 
 
+@lru_cache(maxsize=4)
+def load_standard(path: str | None = None) -> tuple[ExtrusionProfile, ...]:
+    """The AND / AMS standard profiles, named by part number (AND10134-1205)."""
+    p = Path(path) if path else STANDARD_PATH
+    out = []
+    with p.open("r", newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            spec = (row.get("spec") or "").strip().upper()
+            if not spec or spec.startswith("#"):
+                continue
+            source = (row.get("source") or "").strip()
+            prof = ExtrusionProfile(
+                name=f"{spec}-{row['dash'].strip()}", shape=row["shape"].strip(),
+                a=_num(row.get("a_in")), b=_num(row.get("b_in")), c=_num(row.get("c_in")),
+                t=_num(row.get("t_in")), t2=_num(row.get("t2_in")), r=_num(row.get("r_in")),
+                listed_area_in2=_num(row.get("area_in2")), spec=spec,
+                notes=f"{source}. Verify against the current SAE AMS revision.")
+            validate(prof)
+            out.append(prof)
+    names = [q.name for q in out]
+    if len(set(names)) != len(names):
+        raise ValueError("standard_extrusions.csv has a duplicate part number")
+    return tuple(out)
+
+
+# ---------------------------------------------------------------------------
+# the user's own library
+# ---------------------------------------------------------------------------
+
+#: The user's own profiles: beside the launcher, like settings.json, so
+#: deleting the tool folder still removes everything the tool keeps.
+CUSTOM_PATH = Path(__file__).resolve().parents[3] / "custom_extrusions.csv"
+CUSTOM_COLUMNS = ("name", "shape", "a_in", "b_in", "c_in", "t_in", "t2_in", "r_in",
+                  "area_in2", "notes")
+
+CUSTOM_TEMPLATE = """\
+# Custom extrusion library: your own dies and supplier sizes, offered beside
+# the built-in catalog and the AND / AMS standards. One row per profile,
+# dimensions in inches. Lines starting with # are ignored.
+#
+#   shape        a              b               c            t      t2      r
+#   angle        leg 1          leg 2                        thick.
+#   channel      depth (web)    flange width                 web    flange
+#   i_beam       depth          flange width                 web    flange
+#   tee          flange width   overall height               stem   flange
+#   rect_tube    width          height                       wall
+#   round_tube   OD                                          wall
+#   flat_bar     width          thickness
+#   hex_bar      across flats
+#   zee          web height     bottom flange   top flange   thick.
+#   bulb_angle   leg with bulb  plain leg                    thick.         bulb radius
+#   bulb_tee     flange width   overall height               stem   flange  bulb radius
+#
+# area_in2 is optional: give the drawing's area (radii included) and stock
+# weight uses it; leave it blank and the sharp-cornered section is used.
+# A row the tool cannot read is skipped and reported under the stock panel.
+# Keep the header line below; add your rows after it.
+name,shape,a_in,b_in,c_in,t_in,t2_in,r_in,area_in2,notes
+# Examples (remove the # to use):
+# ACME-2210,angle,2.000,1.500,,0.125,,,,ACME 2 x 1-1/2 x 1/8 angle
+# DIE-0457,bulb_tee,1.750,1.125,,0.060,0.070,0.109,0.205,Supplier drawing D-0457
+"""
+
+
+@dataclass(frozen=True)
+class CustomLibrary:
+    path: Path
+    profiles: tuple[ExtrusionProfile, ...] = ()
+    errors: tuple[str, ...] = ()      # "line 7: ...", one per row skipped
+
+    @property
+    def exists(self) -> bool:
+        return self.path.is_file()
+
+
+_custom: CustomLibrary | None = None
+
+
+def custom_library(reload: bool = False) -> CustomLibrary:
+    """The user's library, read once and kept until `reload`."""
+    global _custom
+    if reload or _custom is None or _custom.path != CUSTOM_PATH:
+        _custom = read_custom(CUSTOM_PATH)
+    return _custom
+
+
+def read_custom(path: Path) -> CustomLibrary:
+    """Read a custom library file. Never raises for what is in it: a row
+    that cannot be used is skipped and described in `errors`, because a
+    typo in a file the user edits by hand must not stop the tool."""
+    path = Path(path)
+    if not path.is_file():
+        return CustomLibrary(path)
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        return CustomLibrary(path, errors=(f"cannot read the file: {exc}",))
+    # Keep line numbers while dropping comments and blank lines.
+    lines = [(n, ln) for n, ln in enumerate(text.splitlines(), 1)
+             if ln.strip() and not ln.lstrip().startswith("#")]
+    if not lines:
+        return CustomLibrary(path)
+    header = next(csv.reader([lines[0][1]]))
+    header = [h.strip().lower() for h in header]
+    missing = [c for c in ("name", "shape", "a_in") if c not in header]
+    if missing:
+        return CustomLibrary(path, errors=(
+            f"line {lines[0][0]}: the header needs the columns {', '.join(missing)}",))
+    builtin = {(p.shape, p.name) for p in load_catalog() + load_standard()}
+    seen: set[tuple[str, str]] = set()
+    out, errors = [], []
+    for n, ln in lines[1:]:
+        row = dict(zip(header, (v.strip() for v in next(csv.reader([ln])))))
+        try:
+            name, shape = row.get("name", ""), row.get("shape", "").lower()
+            if not name:
+                raise ValueError("no name")
+            prof = ExtrusionProfile(
+                name=name, shape=shape,
+                a=_num(row.get("a_in")), b=_num(row.get("b_in")), c=_num(row.get("c_in")),
+                t=_num(row.get("t_in")), t2=_num(row.get("t2_in")), r=_num(row.get("r_in")),
+                listed_area_in2=_num(row.get("area_in2")),
+                notes=row.get("notes", ""), custom=True)
+            validate(prof)
+            if (shape, name) in builtin:
+                raise ValueError(f"{name}: already a built-in {SHAPES[shape].lower()}; "
+                                 f"give it another name")
+            if (shape, name) in seen:
+                raise ValueError(f"{name}: listed twice")
+            if prof.listed_area_in2 < 0:
+                raise ValueError(f"{name}: area_in2 cannot be negative")
+        except ValueError as exc:
+            errors.append(f"line {n}: {exc}")
+            continue
+        seen.add((shape, name))
+        out.append(prof)
+    return CustomLibrary(path, tuple(out), tuple(errors))
+
+
+def ensure_custom_file(path: Path | None = None) -> Path:
+    """Create the custom library from the template if there is none yet."""
+    path = Path(path) if path else CUSTOM_PATH
+    if not path.exists():
+        path.write_text(CUSTOM_TEMPLATE, encoding="utf-8")
+    return path
+
+
+def load_profiles() -> tuple[ExtrusionProfile, ...]:
+    """Every profile the tool offers: the catalog, the standards, then the
+    user's own library."""
+    return load_catalog() + load_standard() + custom_library().profiles
+
+
 def find(shape: str, name: str) -> ExtrusionProfile | None:
     return next((p for p in load_profiles() if p.shape == shape and p.name == name), None)
+
+
+_PART_NUMBER = re.compile(r"^\s*(AND|AMS)\s*-?\s*(\d{5})\s*-?\s*(\d{4})\s*$", re.IGNORECASE)
+
+
+def find_part_number(text: str) -> ExtrusionProfile | None:
+    """A standard profile by part number, written either way and loosely:
+    "AND10134-1205", "AMS10134-1205", "and 10134 1205"."""
+    m = _PART_NUMBER.match(text or "")
+    if not m:
+        return None
+    name = f"AND{m.group(2)}-{m.group(3)}"
+    return next((p for p in load_standard() if p.name == name), None)
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +817,54 @@ def _sample(points_mm, limit: int = 2 * MAX_POINTS) -> np.ndarray | None:
     if len(pts) > limit:
         pts = pts[np.linspace(0, len(pts) - 1, limit).astype(int)]
     return pts
+
+
+def _shortest_fitting_length(profile: ExtrusionProfile, rect_box, cylinder,
+                             loose: bool) -> float | None:
+    """The shortest way the profile's envelope could run along the part, by
+    the cheap envelope checks alone; None when no way fits."""
+    lengths = []
+    if rect_box is not None:
+        ext = [float(e) / MM_PER_INCH for e in rect_box.extents_mm]
+        for k in range(3):
+            i, j = [m for m in range(3) if m != k]
+            if profile.fits_rect(ext[i], ext[j], loose=loose):
+                lengths.append(ext[k])
+    if cylinder is not None and profile.shape in ROUND_SHAPES:
+        if profile.fits_circle(2.0 * cylinder.radius_mm / MM_PER_INCH):
+            lengths.append(cylinder.height_mm / MM_PER_INCH)
+    return min(lengths) if lengths else None
+
+
+def best_profile(profiles, rect_box, cylinder=None, part_volume_in3: float | None = None,
+                 points_mm=None) -> ExtrusionProfile | None:
+    """The profile that holds the part with the least material (at the
+    recommended length), or None.
+
+    Hundreds of standard profiles make the full fit test too slow to run on
+    every one, so each is first bounded below by its area times the shortest
+    length its envelope could run; smallest first, a profile that cannot
+    beat the best so far is never fitted.
+    """
+    pts = _sample(points_mm)
+    bounded = []
+    for prof in profiles:
+        shortest = _shortest_fitting_length(prof, rect_box, cylinder, loose=pts is not None)
+        if shortest is not None:
+            floor = prof.area_in2 * stock_mod.ceil_to_increment(
+                shortest + stock_mod.GRIP_ALLOWANCE_IN)
+            bounded.append((floor, prof))
+    bounded.sort(key=lambda fp: fp[0])
+    best, best_vol = None, None
+    for floor, prof in bounded:
+        if best_vol is not None and floor >= best_vol - 1e-12:
+            break
+        s = extrusion_stock(prof, rect_box, cylinder, part_volume_in3=part_volume_in3,
+                            points_mm=pts)
+        if (s is not None and s.fits and s.enough_material
+                and (best_vol is None or s.volume_in3 < best_vol)):
+            best, best_vol = prof, s.volume_in3
+    return best
 
 
 def extrusion_stock(profile: ExtrusionProfile, rect_box, cylinder=None,

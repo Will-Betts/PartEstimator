@@ -23,7 +23,7 @@ part-estimator = "partestimator.__main__:main"
 include = ["partestimator*"]
 
 [tool.setuptools.package-data]
-"partestimator" = ["data/*.csv"]
+"partestimator" = ["data/*.csv", "data/icons/*.svg"]
 "partestimator.machining" = ["data/*.csv", "*.pdf"]
 "partestimator.smt" = ["*.md"]
 

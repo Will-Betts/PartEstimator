@@ -523,6 +523,11 @@ class MainWindow(QMainWindow):
             if self.opts.cost_per_kg else "--",
         )
 
+        # The box drawn round the flat carries its size as text, so it follows
+        # the Units setting along with everything else on screen.
+        if self._current_view == "flat" and "flat" in self.scenes:
+            self._apply_box(self.scenes["flat"][0])
+
         rows = bend_table(part, self.opts)
         self.t_bends.show_bends(rows, unit)
         self.t_features.show_features(part, unit)
