@@ -17,8 +17,12 @@ scratch/
 .coverage
 htmlcov/
 
+# Claude Code: per-developer permissions
+.claude/settings.local.json
+
 # Written by the app at runtime
 settings.json
+custom_extrusions.csv
 part_estimator.log
 last_error.log
 part_estimator-crash.txt
