@@ -124,8 +124,14 @@ class TestAreas(unittest.TestCase):
         self.assertAlmostEqual(self.area("tee", 2, 2, 0.25, 0.25), 2 * 0.25 + 1.75 * 0.25)
         self.assertAlmostEqual(self.area("rect_tube", 2, 1, 0.125), 2 - 1.75 * 0.75)
         self.assertAlmostEqual(self.area("round_tube", 2, 0, 0.25), math.pi / 4 * (4 - 2.25))
-        self.assertAlmostEqual(self.area("flat_bar", 3, 0.5), 1.5)
         self.assertAlmostEqual(self.area("hex_bar", 1), math.sqrt(3) / 2)
+
+    def test_flat_bar_is_not_an_extrusion(self):
+        """Flat and square bar is plate stock; the Plate / block type covers it."""
+        self.assertNotIn("flat_bar", ex.SHAPES)
+        self.assertFalse([p for p in ex.load_catalog() if p.shape == "flat_bar"])
+        with self.assertRaises(ValueError):
+            self.area("flat_bar", 3, 0.5)
 
     def test_outline_area_matches_the_formula(self):
         """The drawn outline and the priced area are the same section."""
@@ -225,21 +231,23 @@ class TestFitting(unittest.TestCase):
         self.assertEqual(s.basis, st.EXTRUSION)
 
     def test_recommended_length_follows_the_l_rule(self):
-        s = ex.extrusion_stock(ex.find("flat_bar", "2 x 1/2"), box(5.3, 1.9, 0.4))
+        tube = ex.find("rect_tube", "2 x 1 x 1/8")
+        s = ex.extrusion_stock(tube, box(5.3, 1.9, 0.4))
         self.assertAlmostEqual(s.recommended_length_in, 6.5)    # 5.3 + 1.0 -> 6.5
         self.assertAlmostEqual(s.length_in, 6.5)
-        self.assertAlmostEqual(s.volume_in3, 1.0 * 6.5)
+        self.assertAlmostEqual(s.volume_in3, tube.area_in2 * 6.5)
 
     def test_the_shortest_fitting_cut_wins(self):
-        """A 3 x 3 x 1 part in 3 x 3 bar is a 1 inch slice, not 3 inches."""
-        s = ex.extrusion_stock(ex.find("flat_bar", "3 x 3 square"), box(3.0, 3.0, 1.0))
+        """A 3 x 3 x 1 part in 4 x 4 tube is a 1 inch slice, not 3 inches."""
+        s = ex.extrusion_stock(ex.find("rect_tube", "4 x 4 x 1/4"), box(3.0, 3.0, 1.0))
         self.assertAlmostEqual(s.min_length_in, 1.0)
         self.assertEqual(s.placement[1], Z)
 
     def test_a_custom_length_is_kept(self):
-        s = ex.extrusion_stock(ex.find("flat_bar", "2 x 1/2"), box(5.3, 1.9, 0.4), length_in=12.0)
+        tube = ex.find("rect_tube", "2 x 1 x 1/8")
+        s = ex.extrusion_stock(tube, box(5.3, 1.9, 0.4), length_in=12.0)
         self.assertAlmostEqual(s.length_in, 12.0)
-        self.assertAlmostEqual(s.volume_in3, 12.0)
+        self.assertAlmostEqual(s.volume_in3, tube.area_in2 * 12.0)
         self.assertAlmostEqual(s.min_length_in, 5.3)
 
     def test_too_big_a_section_is_flagged(self):
@@ -266,7 +274,7 @@ class TestFitting(unittest.TestCase):
         self.assertTrue(angle.fits)
         self.assertFalse(angle.enough_material)
         self.assertTrue(any("less material" in w for w in st.fit_warnings(angle, b, None)))
-        bar = ex.extrusion_stock(ex.find("flat_bar", "1 x 1 square"), b,
+        bar = ex.extrusion_stock(ex.find("hex_bar", "1-1/2 A/F"), b,
                                  part_volume_in3=6.0 * 0.9 * 0.9)
         self.assertTrue(bar.enough_material)
         self.assertEqual(st.fit_warnings(bar, b, None), [])
@@ -335,7 +343,7 @@ class TestFittingToTheMesh(unittest.TestCase):
         angle = ex.extrusion_stock(ex.find("angle", "1 x 1 x 1/8"), b, points_mm=pts)
         self.assertFalse(angle.enough_material)
         self.assertTrue(any("only" in w for w in st.fit_warnings(angle, b, None)))
-        bar = ex.extrusion_stock(ex.find("flat_bar", "1 x 1 square"), b, points_mm=pts)
+        bar = ex.extrusion_stock(ex.find("hex_bar", "1-1/2 A/F"), b, points_mm=pts)
         self.assertTrue(bar.enough_material)
 
     def test_a_small_part_slides_into_the_profile_corner(self):
@@ -466,12 +474,12 @@ class TestCustomLibrary(unittest.TestCase):
     def test_bad_rows_are_skipped_and_reported_not_raised(self):
         lib = self.write(
             "name,shape,a_in,b_in,t_in",
-            "GOOD,flat_bar,2,0.5,",
+            "GOOD,rect_tube,2,1,0.125",
             "TYPO,angle,2,1.5,abc",                # not a number
             "THICK,rect_tube,1,1,0.6",             # wall too thick
-            "ODD,pentagon,1,,",                    # unknown shape
-            ",flat_bar,1,1,",                      # no name
-            "GOOD,flat_bar,3,0.5,",                # listed twice
+            "FLAT,flat_bar,2,0.5,",                # no longer a shape: use plate
+            ",rect_tube,1,1,0.1",                  # no name
+            "GOOD,rect_tube,3,2,0.125",            # listed twice
             "AND10134-1205,angle,1.25,1,0.094")    # shadows a built-in
         self.assertEqual([p.name for p in lib.profiles], ["GOOD"])
         self.assertEqual(len(lib.errors), 6)
@@ -484,15 +492,16 @@ class TestCustomLibrary(unittest.TestCase):
         self.assertIn("name", lib.errors[0])
 
     def test_offered_with_everything_else(self):
-        self.write("name,shape,a_in,b_in", "MY-BAR,flat_bar,0.95,0.95")
+        self.write("name,shape,a_in,b_in", "MY-HEX,hex_bar,1.25,")
         saved = ex.CUSTOM_PATH
         ex.CUSTOM_PATH = self.path
         self.addCleanup(lambda: (setattr(ex, "CUSTOM_PATH", saved), ex.custom_library(True)))
-        self.assertIn("MY-BAR", [p.name for p in ex.load_profiles()])
-        # The tightest solid bar for a 0.9 square part is now the user's own.
+        self.assertIn("MY-HEX", [p.name for p in ex.load_profiles()])
+        # The tightest solid bar for a 0.9 square part is now the user's own,
+        # beating the catalog's 1-1/2 hex.
         best = ex.best_profile(ex.load_profiles(), box(6.0, 0.9, 0.9),
                                part_volume_in3=6.0 * 0.81)
-        self.assertEqual(best.name, "MY-BAR")
+        self.assertEqual(best.name, "MY-HEX")
 
 
 if __name__ == "__main__":

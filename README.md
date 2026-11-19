@@ -282,8 +282,10 @@ overlay, feature row and export all follow it at once.
 | **Round bar** | Diameter, length (needs the part's cylinder fit) |
 | **Extrusion profile** | A profile from the list, and its length |
 
-- A new part always opens on the **recommended** stock: the existing rules,
-  shown under *Stock Size*.
+- A new part opens on the **recommended** stock: round bar for round work,
+  otherwise plate, unless an extrusion profile holds the whole part with
+  less material than that plate, in which case it opens on the profile.
+  Hover over the stock table for the rule behind the size.
 - **Snap to minimum** gives the part's own bounding box, with no cleanup or
   work-holding allowance. **Snap to recommended** goes back to the rules.
 - Typing any size makes it **custom**. Typing the recommended or minimum
@@ -299,28 +301,30 @@ overlay, feature row and export all follow it at once.
 
 **Extrusions.** The profile is one dropdown, like the material. Open it for
 a menu of shapes (angle, channel, I-beam, tee, rectangular or round tube,
-flat/square bar, hex bar) and aerospace standards (AND10133 to AND10141),
-each with its sizes or dash numbers in a submenu. Or type into it, e.g.
-`angle 2 x 2` or `AND10134-1205`. When you switch to Extrusion, the tool
-suggests the profile that holds the part with the least material, from both
-lists.
+hex bar) and aerospace standards (AND10133 to AND10141), each with its sizes
+or dash numbers in a submenu. Or type into it, e.g. `angle 2 x 2` or
+`AND10134-1205`. When you switch to Extrusion, the tool suggests the profile
+that holds the part with the least material, from both lists. Flat and
+square bar are not listed: that is plate stock, so use **Plate / block**.
 
 **Part orientation in stock.** For plate and extrusion stock, the part is
 placed in its stock by the smallest box that fits it. When that is not how
-it will be held, set it under *Part orientation in stock*:
+it will be held, press **Change part orientation…**. A small window opens
+beside the 3D view:
 
-- **Pick part face**, then click a flat face of the part in the 3D view (it
-  turns green; curved faces are refused). **Pick stock face**, then click a
-  face of the stock box. Either order. The two faces are made parallel, and
-  the stock is refitted as tight as that allows.
-- **Rotate part** X, Y and Z turn the part, in degrees, about the stock's
-  length, width and thickness axes from there (right-hand rule). The part
-  stays put on screen and the stock turns round it.
+- **Make two faces parallel.** Click a flat face of the part (it turns
+  green; curved faces are refused), then the face of the stock it should lie
+  against. The stock is refitted as tight as that allows, and you can click
+  another pair straight away. **Start over** forgets a half-made pair.
+- **Rotate part.** X, Y and Z turn the part, in degrees, about the stock's
+  length, width and thickness axes (right-hand rule). The part stays put on
+  screen and the stock turns round it.
 - The stock's faces are named by size, so if the part is longest in the
-  direction you picked, the note under the controls says the face ended up
-  on the stock's end or side rather than its top.
-- **Automatic orientation** goes back to the smallest box. A new part always
-  opens on it.
+  direction you picked, the window says the face ended up on the stock's end
+  or side rather than its top.
+- **Automatic** goes back to the smallest box. A new part always opens on it.
+  While the orientation is set by hand, *set by hand* shows beside the
+  button; hover over it for what was done.
 - Stock size, bounding box, weight, features and cycle time all follow the
   orientation. A custom size you typed is kept.
 

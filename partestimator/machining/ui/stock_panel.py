@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -25,16 +24,13 @@ from PySide6.QtWidgets import (
 from partestimator.machining.geometry import extrusions as ex
 from partestimator.machining.geometry import orientation as orient
 from partestimator.machining.geometry import stock as st
+from partestimator.machining.ui.orientation_dialog import OrientationDialog
 
 PLATE, ROUND, EXTRUSION = "Plate / block", "Round bar", "Extrusion profile"
 KIND_OF = {PLATE: "rectilinear", ROUND: "cylindrical"}
 
-BASIS_TEXT = {
-    st.RECOMMENDED: "Recommended size (the stock rules).",
-    st.MINIMUM: "Minimum size: the part's own envelope, no allowance.",
-    st.CUSTOM: "Custom size.",
-}
-
+STEP_PART = "Click a <b>flat face of the part</b> in the 3D view."
+STEP_STOCK = "Now click the <b>face of the stock</b> it should lie against."
 
 CUSTOM_GROUP = "Custom library"
 
@@ -124,22 +120,6 @@ def _spin(tip: str) -> QDoubleSpinBox:
     return s
 
 
-def _angle_spin(axis_name: str) -> QDoubleSpinBox:
-    s = QDoubleSpinBox()
-    s.setDecimals(1)
-    s.setRange(-180.0, 180.0)
-    s.setSingleStep(1.0)
-    s.setWrapping(True)
-    s.setSuffix("°")
-    s.setKeyboardTracking(False)
-    s.setToolTip(f"Turn the part about the stock's {axis_name} axis, in degrees.\n"
-                 "Right-hand rule; the stock is refitted round the part.")
-    return s
-
-
-NO_PICK = "not picked"
-
-
 def _rank(box) -> list[int]:
     """For each row of `box.axes`: 0 if it is the length, 1 the width, 2 the
     thickness -- the stock rules name a box's sides by size."""
@@ -173,6 +153,7 @@ class StockControls(QWidget):
         self._how = ""
         self._part_normal = None
         self._stock_axis = None
+        self._pick_step = ""           # "part", "stock" or "" (not picking)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -241,9 +222,11 @@ class StockControls(QWidget):
         row.addStretch(1)
         lay.addLayout(row)
 
-        self.lbl_status = QLabel("Open a part to size its stock.")
+        # Problems only (stock too small, profile cannot hold the part).
+        self.lbl_status = QLabel()
         self.lbl_status.setWordWrap(True)
         self.lbl_status.setTextFormat(Qt.RichText)
+        self.lbl_status.setVisible(False)
         lay.addWidget(self.lbl_status)
 
         self._build_orientation(lay)
@@ -261,64 +244,31 @@ class StockControls(QWidget):
         self.setEnabled(False)
 
     def _build_orientation(self, lay) -> None:
-        """How the part sits in plate or extrusion stock: a face pair, then
-        fine turns about the stock's own axes."""
-        self.orient_box = QGroupBox("Part orientation in stock")
-        g = QVBoxLayout(self.orient_box)
-        g.setSpacing(4)
-
-        row = QHBoxLayout()
-        self.btn_pick_part = QPushButton("Pick part face")
-        self.btn_pick_part.setCheckable(True)
-        self.btn_pick_part.setToolTip(
-            "Then click a FLAT face of the part in the 3D view.\n"
-            "With a stock face picked too, the two are made parallel.")
-        self.btn_pick_stock = QPushButton("Pick stock face")
-        self.btn_pick_stock.setCheckable(True)
-        self.btn_pick_stock.setToolTip(
-            "Then click a face of the stock (or bounding) box in the 3D view.\n"
-            "With a part face picked too, the two are made parallel.")
-        row.addWidget(self.btn_pick_part)
-        row.addWidget(self.btn_pick_stock)
+        """One button; the controls live in a tool window beside the view."""
+        self.orient_row = QWidget()
+        row = QHBoxLayout(self.orient_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.btn_orient = QPushButton("Change part orientation…")
+        self.btn_orient.setToolTip(
+            "Make a face of the part parallel to a face of the stock, and/or turn\n"
+            "the part about the stock's X, Y or Z axis.")
+        row.addWidget(self.btn_orient)
+        self.lbl_oriented = QLabel("set by hand")
+        self.lbl_oriented.setStyleSheet("color: #555;")
+        row.addWidget(self.lbl_oriented)
         row.addStretch(1)
-        g.addLayout(row)
+        lay.addWidget(self.orient_row)
 
-        self.lbl_picks = QLabel()
-        self.lbl_picks.setWordWrap(True)
-        self.lbl_picks.setStyleSheet("color: #555;")
-        g.addWidget(self.lbl_picks)
-
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Rotate part:"))
-        self.spin_rx = _angle_spin("X (length)")
-        self.spin_ry = _angle_spin("Y (width)")
-        self.spin_rz = _angle_spin("Z (thickness)")
-        for name, spin in (("X", self.spin_rx), ("Y", self.spin_ry), ("Z", self.spin_rz)):
-            lbl = QLabel(name)
-            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            row.addWidget(lbl)
-            row.addWidget(spin, 1)
-        g.addLayout(row)
-
-        row = QHBoxLayout()
-        self.btn_auto_orient = QPushButton("Automatic orientation")
-        self.btn_auto_orient.setToolTip(
-            "Back to the automatic fit: the smallest box round the part.")
-        row.addWidget(self.btn_auto_orient)
-        row.addStretch(1)
-        g.addLayout(row)
-
-        self.lbl_orient = QLabel()
-        self.lbl_orient.setWordWrap(True)
-        self.lbl_orient.setTextFormat(Qt.RichText)
-        g.addWidget(self.lbl_orient)
-        lay.addWidget(self.orient_box)
-
-        self.btn_pick_part.toggled.connect(lambda on: self._pick_toggled("part", on))
-        self.btn_pick_stock.toggled.connect(lambda on: self._pick_toggled("stock", on))
-        for s in (self.spin_rx, self.spin_ry, self.spin_rz):
-            s.valueChanged.connect(lambda _v: self._on_angles_changed())
-        self.btn_auto_orient.clicked.connect(self.reset_orientation)
+        self.orient_dialog = OrientationDialog(self)
+        d = self.orient_dialog
+        self.spin_rx, self.spin_ry, self.spin_rz = d.spin_rx, d.spin_ry, d.spin_rz
+        self.btn_auto_orient = d.btn_automatic
+        for spin in d.spins:
+            spin.valueChanged.connect(lambda _v: self._on_angles_changed())
+        d.startOver.connect(self._start_picking)
+        d.automatic.connect(self.reset_orientation)
+        d.closed.connect(self.cancel_picking)
+        self.btn_orient.clicked.connect(self.open_orientation)
         self._show_orientation()
 
     # -- public ------------------------------------------------------------
@@ -337,21 +287,43 @@ class StockControls(QWidget):
     def angles(self) -> tuple[float, float, float]:
         return (self.spin_rx.value(), self.spin_ry.value(), self.spin_rz.value())
 
+    def open_orientation(self) -> None:
+        """Show the orientation window and start picking faces."""
+        d = self.orient_dialog
+        if not d.isVisible():
+            top = self.window()
+            d.move(top.geometry().topLeft() + top.rect().center() / 2)
+        d.show()
+        d.raise_()
+        self._start_picking()
+
+    def picking(self) -> str:
+        """What a click in the 3D view should pick: "part", "stock" or ""."""
+        return self._pick_step
+
     def set_part_face(self, normal) -> None:
         """A flat face of the part was picked: its outward normal."""
         self._part_normal = orient._unit(normal)
-        self.btn_pick_part.setChecked(False)
-        self._try_align()
+        self._stock_axis = None
+        self._set_step("stock")
 
     def set_stock_face(self, axis_index: int) -> None:
-        """A stock face was picked: the row of `rect_box().axes` it faces."""
-        self._stock_axis = int(axis_index)
-        self.btn_pick_stock.setChecked(False)
-        self._try_align()
+        """A stock face was picked: the row of `rect_box().axes` it faces.
+        With a part face already picked, the two are made parallel."""
+        if self._part_normal is None:
+            return
+        normal, self._part_normal = self._part_normal, None
+        self.align(normal, int(axis_index))
+        self._set_step("part")
 
     def cancel_picking(self) -> None:
-        for b in (self.btn_pick_part, self.btn_pick_stock):
-            b.setChecked(False)
+        self._part_normal = self._stock_axis = None
+        self._set_step("")
+
+    def pick_problem(self, message: str) -> None:
+        """A click that picked nothing usable: say so, and ask again."""
+        step = STEP_STOCK if self._pick_step == "stock" else STEP_PART
+        self.orient_dialog.set_step(f"<span style='color:#b45309'>{message}</span> {step}")
 
     def align(self, part_normal, stock_axis: int) -> None:
         """Make the stock face along row `stock_axis` of the current box
@@ -373,13 +345,15 @@ class StockControls(QWidget):
                           f"{['length', 'width', 'thickness'][landed]})")
         self._how += "."
         self._oriented = True
+        self.orient_dialog.set_step(self._how + "<br><br>" + STEP_PART)
         self._set_angles((0.0, 0.0, 0.0))
         self._reorient()
 
     def reset_orientation(self) -> None:
         """Back to the automatic, smallest-volume fit."""
         self._part_normal = self._stock_axis = None
-        self.cancel_picking()
+        if self._pick_step:
+            self._start_picking()
         if self._auto_rect is None:
             return
         self._base_axes = orient.sorted_frame(self._auto_rect)
@@ -392,10 +366,13 @@ class StockControls(QWidget):
         self._restock()
 
     def set_part(self, rect_box, cylinder, primary: str, emit: bool = True,
-                 part_volume_in3: float | None = None, points_mm=None, triangles=None):
+                 part_volume_in3: float | None = None, points_mm=None, triangles=None,
+                 extrusion=None):
         """A new part: back to the recommended stock of the best-fitting kind.
         `points_mm`, the part's mesh vertices, lets an extrusion profile be
-        checked against the part's real section and turned to match it."""
+        checked against the part's real section and turned to match it.
+        `extrusion`, a (shape, name) the analysis found holds the part with
+        less material than plate, opens it on that profile instead."""
         self._rect, self._cyl = rect_box, cylinder
         self._auto_rect = rect_box
         self._part_volume = part_volume_in3
@@ -408,21 +385,23 @@ class StockControls(QWidget):
         self._oriented = False
         self._how = ""
         self._part_normal = self._stock_axis = None
+        self.orient_dialog.close()
         self.cancel_picking()
         self._set_angles((0.0, 0.0, 0.0))
-        can_turn = rect_box is not None and self._all_points is not None
-        for w in (self.btn_pick_part, self.btn_pick_stock, self.spin_rx, self.spin_ry,
-                  self.spin_rz, self.btn_auto_orient):
-            w.setEnabled(can_turn)
+        self.btn_orient.setEnabled(rect_box is not None and self._all_points is not None)
         self.setEnabled(rect_box is not None or cylinder is not None)
         round_ok = cylinder is not None
         self.type_combo.model().item(1).setEnabled(round_ok)
         kind = ROUND if (primary == "cylindrical" and round_ok) else PLATE
+        profile = ex.find(*extrusion) if extrusion and kind == PLATE else None
         self._updating = True
-        self.type_combo.setCurrentText(kind)
+        self.type_combo.setCurrentText(EXTRUSION if profile is not None else kind)
+        if profile is not None:
+            self.profile.setCurrentText(_value(profile))
         self._updating = False
         self._show_for_type()
-        stock = st.snap(KIND_OF[kind], st.RECOMMENDED, rect_box, cylinder)
+        stock = (self._extrusion(None) if profile is not None
+                 else st.snap(KIND_OF[kind], st.RECOMMENDED, rect_box, cylinder))
         self._apply(stock, emit=emit)
         return stock
 
@@ -431,9 +410,11 @@ class StockControls(QWidget):
         self._auto_rect = self._all_points = self._base_axes = None
         self._part_normal = self._stock_axis = None
         self._oriented = False
+        self.orient_dialog.close()
         self.cancel_picking()
         self.setEnabled(False)
-        self.lbl_status.setText("Open a part to size its stock.")
+        self.lbl_status.setText("")
+        self.lbl_status.setVisible(False)
 
     def snap(self, basis: str) -> None:
         kind = self.type_combo.currentText()
@@ -477,34 +458,34 @@ class StockControls(QWidget):
             self.lbl_custom.setText("")
             self.lbl_custom.setVisible(False)
             return
-        n = len(library.profiles)
-        lines = [f"Custom library: {n} profile{'s' if n != 1 else ''}."]
+        lines = []
         for err in library.errors[:5]:
             lines.append(f"<span style='color:#b45309'>&#9888; Skipped {err}</span>")
         if len(library.errors) > 5:
             lines.append(f"<span style='color:#b45309'>... and {len(library.errors) - 5} "
                          f"more rows skipped.</span>")
         self.lbl_custom.setText("<br>".join(lines))
-        self.lbl_custom.setVisible(True)
+        self.lbl_custom.setVisible(bool(lines))
+        n = len(library.profiles)
+        self.btn_reload_custom.setToolTip(
+            f"Read {ex.CUSTOM_PATH.name} again after editing it.\n"
+            f"It holds {n} profile{'s' if n != 1 else ''}.")
 
     # -- orientation -------------------------------------------------------
 
-    def _pick_toggled(self, which: str, on: bool) -> None:
-        other = self.btn_pick_stock if which == "part" else self.btn_pick_part
-        if on and other.isChecked():
-            other.blockSignals(True)
-            other.setChecked(False)
-            other.blockSignals(False)
-        self._show_orientation()
-        self.pickRequested.emit(which if on else "")
+    def _start_picking(self) -> None:
+        self._part_normal = self._stock_axis = None
+        self.orient_dialog.set_step(STEP_PART)
+        self._set_step("part")
 
-    def _try_align(self) -> None:
-        if self._part_normal is not None and self._stock_axis is not None:
-            normal, axis = self._part_normal, self._stock_axis
-            self._part_normal = self._stock_axis = None
-            self.align(normal, axis)
-        else:
-            self._show_orientation()
+    def _set_step(self, step: str) -> None:
+        """Ask for the next click in the 3D view (or stop asking)."""
+        if step == "stock":
+            self.orient_dialog.set_step(STEP_STOCK)
+        changed = step != self._pick_step
+        self._pick_step = step
+        if changed:
+            self.pickRequested.emit(step)
 
     def _set_angles(self, angles) -> None:
         for spin, a in zip((self.spin_rx, self.spin_ry, self.spin_rz), angles):
@@ -546,33 +527,15 @@ class StockControls(QWidget):
                                     else st.RECOMMENDED, self._rect, self._cyl))
 
     def _show_orientation(self) -> None:
-        if not hasattr(self, "orient_box"):
+        if not hasattr(self, "orient_row"):
             return
-        self.orient_box.setVisible(self.type_combo.currentText() != ROUND)
-        part = "picked" if self._part_normal is not None else NO_PICK
-        stock = NO_PICK
-        if self._stock_axis is not None and self._rect is not None:
-            stock = orient.STOCK_FACE_NAMES[_rank(self._rect)[self._stock_axis]]
-        if self.btn_pick_part.isChecked():
-            part = "<i>click a flat face of the part…</i>"
-        if self.btn_pick_stock.isChecked():
-            stock = "<i>click a face of the stock box…</i>"
-        self.lbl_picks.setTextFormat(Qt.RichText)
-        self.lbl_picks.setText(f"Part face: {part} &nbsp;·&nbsp; Stock face: {stock}")
-        if not self._oriented:
-            self.lbl_orient.setText("Automatic: the smallest box round the part.")
-            return
-        lines = [self._how] if self._how else []
-        turns = [f"{n} {a:+g}°" for n, a in zip("XYZ", self.angles()) if abs(a) > 1e-9]
-        if turns:
-            lines.append("Turned " + ", ".join(turns) + ".")
-        if self._rect is not None and self._auto_rect is not None:
-            more = self._rect.volume_mm3 / self._auto_rect.volume_mm3 - 1.0 \
-                if self._auto_rect.volume_mm3 > 0 else 0.0
-            if more > 0.005:
-                lines.append(f"<span style='color:#555'>Box is {more:.0%} larger than the "
-                             f"automatic fit.</span>")
-        self.lbl_orient.setText("<b>Set by hand.</b> " + " ".join(lines))
+        self.orient_row.setVisible(self.type_combo.currentText() != ROUND)
+        self.lbl_oriented.setVisible(self._oriented)
+        if self._oriented:
+            turns = [f"{n} {a:+g}°" for n, a in zip("XYZ", self.angles()) if abs(a) > 1e-9]
+            tip = " ".join(([self._how] if self._how else []) +
+                           (["Turned " + ", ".join(turns) + "."] if turns else []))
+            self.lbl_oriented.setToolTip(tip)
 
     # -- reacting to the user ----------------------------------------------
 
@@ -651,8 +614,9 @@ class StockControls(QWidget):
         # A profile's section is fixed by the catalog; only its length is chosen.
         self.spin_a.setEnabled(kind != EXTRUSION)
         self.spin_b.setEnabled(kind != EXTRUSION)
-        if kind == ROUND:
-            self.cancel_picking()          # a bar has no faces to line up
+        if kind == ROUND:                  # a bar has no faces to line up
+            self.orient_dialog.close()
+            self.cancel_picking()
         self._show_orientation()
 
     def _apply(self, stock, emit: bool = True, reflect: bool = True) -> None:
@@ -673,18 +637,15 @@ class StockControls(QWidget):
         s = self._stock
         if s is None:
             return
-        lines = []
         if s.is_extrusion:
             p = s.profile
             basis = "per the standard" if p.listed_area_in2 else "sharp corners"
-            lines.append(f"<b>{p.describe()}</b>, section {p.area_in2:.3f} in&sup2; ({basis}).")
-            lines.append(f'Length: minimum {s.min_length_in:.3f}", '
-                         f'recommended {s.recommended_length_in:.3f}".')
-            if s.section_inside is not None and s.enough_material:
-                lines.append("<span style='color:#555'>The part lies inside the profile's "
-                             "section.</span>")
+            self.profile.setToolTip(f"{p.describe()}\nSection {p.area_in2:.3f} in² ({basis}).")
+            self.spin_l.setToolTip(f'Length. Minimum {s.min_length_in:.3f}", '
+                                   f'recommended {s.recommended_length_in:.3f}".')
         else:
-            lines.append(BASIS_TEXT.get(s.basis, ""))
-        for w in st.fit_warnings(s, self._rect, self._cyl):
-            lines.append(f"<span style='color:#b91c1c'>&#9888; {w}</span>")
-        self.lbl_status.setText("<br>".join(lines))
+            self.spin_l.setToolTip("Length.")
+        warnings = st.fit_warnings(s, self._rect, self._cyl)
+        self.lbl_status.setText("<br>".join(
+            f"<span style='color:#b91c1c'>&#9888; {w}</span>" for w in warnings))
+        self.lbl_status.setVisible(bool(warnings))
