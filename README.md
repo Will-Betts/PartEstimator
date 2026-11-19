@@ -69,6 +69,7 @@ Windows PowerShell 5.1 and in PowerShell 7.
 .\pe.ps1 classify <step...>        sheet metal or machined?   --json  --cutoff IN
 .\pe.ps1 sheet <step> [options]    flat pattern: DXF, STEP, report   (sheet --help)
 .\pe.ps1 calibrate <csv>           fit calibration factors to measured times
+.\pe.ps1 tune [--add ...] [--save]  shop tuning: fit the estimate to your measured parts
 .\pe.ps1 test [pytest args]        fast tests: timing model and CLI (seconds)
 .\pe.ps1 test -Full                machining self-test plus the full suite
 .\pe.ps1 setup [-Dev] [-Force]     create/update .venv; -Force rebuilds from scratch
@@ -328,6 +329,20 @@ beside the 3D view:
 - Stock size, bounding box, weight, features and cycle time all follow the
   orientation. A custom size you typed is kept.
 
+**Round bar orientation.** On **Round bar**, the same button sets which way
+the bar runs. The automatic bar is the smallest cylinder round the part.
+Click a flat face of the part, and the bar's axis is set square to it, so
+that face lies parallel to the bar's ends. The bar is refitted as tight as
+that allows. You can click another face straight away, and **Automatic**
+goes back to the smallest bar.
+
+- The lathe estimate is built from the profile turned about the bar's axis,
+  so that profile is measured again about the new axis. This takes a few
+  seconds in the background (the status bar says so), and the cycle time
+  updates when it is done.
+- Plate and bar keep their own orientation, so switching the stock type
+  doesn't lose either one.
+
 **AND / AMS standard extrusions.** The library holds 456 dies from the
 nine Army-Navy aeronautical standards for extruded aluminum shapes. SAE's
 AMS101xx standards replaced them with the same dash numbers, so the search
@@ -391,6 +406,114 @@ for each shape). Add the sizes your suppliers stock. A row with impossible
 dimensions stops the tool loading the file, so a typo cannot go unnoticed.
 Section areas are computed with **sharp corners**, so check the shipped
 sizes against your supplier's catalog.
+
+---
+
+## Shop tuning: fitting the estimate to your own parts
+
+The cycle-time estimate is built from published cutting data, so out of the
+box it is not your shop's number. Shop tuning closes the gap: keep a library
+of parts you have run and timed, and the tool fits a few shop settings until
+its estimates match them.
+
+**What is kept: the geometry the estimate uses, not the STEP files.** When a
+part is added, it is analysed once and everything the cycle-time estimate
+reads from it is captured: the feature vector (volumes, areas by surface
+type, edge lengths, radii, thin-wall share and so on), every hole (diameter,
+depth, axis) and, for round parts, the turning profile. That is about 12 KB of
+JSON per part. The library never needs the model again, so the STEP file can
+move or be deleted. Its path is noted only so **Open in Machining tab** can
+show the part again while the file is still there.
+
+The part's inputs stay editable after capture: material, process, finish,
+operations, tapped holes and the stock. They are applied to the captured
+geometry on every estimate, and give the same number the Machining tab
+shows.
+
+**Where it lives.** In the tool's own folder, in `tuning\`. It is in
+`.gitignore`, so your shop's data never goes into the repository:
+
+```text
+tuning\
+    parts.csv          the library: one row per part (edit it in Excel too)
+    captured\<id>.json each part's captured geometry
+    shop_tuning.csv    the adjustments in use, laid over shop_profile.csv
+    last_fit.json      a summary of that fit
+    README.txt         what every column means
+```
+
+When you update the tool, keep or copy the `tuning` folder across. If you
+download a new ZIP into a new folder, copy `tuning` into it. A new shop starts
+without one and builds its own. To share one library between the people in a
+shop, set the environment variable `PE_TUNING_DIR` to a shared folder.
+
+**Building the library (about 50 parts is a good target).** There are three
+ways, and you can mix them:
+
+1. **One at a time, set up properly.** Open the part, set the material,
+   finish, operations, tapped holes and the stock (orientation and extrusions
+   included) as it was really run. Then choose
+   **Cycle Time > Shop tuning > Save this part to the tuning library…** and
+   type the measured time.
+2. **A batch.** Open **File > Shop tuning…** (or the same menu) and use
+   **Add STEP files…**. The files are analysed in the background, a few at a
+   time, and captured. Each one starts with the material, finish and
+   operations now set in the Machining tab and the stock the Machining tab
+   would choose. Fill in the measured time and anything that differs in the
+   table.
+3. **In Excel.** Edit `parts.csv` and press **Reload**. Leave the `id`
+   column alone, because it links the row to its captured geometry.
+
+Stock is edited in the table or the CSV. Sizes are in inches, and fractions
+like `1-1/4` are fine:
+
+```text
+plate 1 x 4 x 6                     thickness x width x length
+round 2 x 6                         diameter x length
+extrusion AND10133-2004 @ 6.5       profile @ length (or e.g. Angle 2 x 2 x 1/4 @ 12)
+```
+
+**What to enter as the measured time:** door-to-door minutes **per part**,
+covering every operation, load/unload and deburring at the machine. Leave out
+the batch setup (divide it out, or leave it off).
+
+**Fitting.** The **Tune** tab lists the settings that can be fitted: roughing,
+finishing and hole time multipliers, tool change, load/unload, and more you
+can tick. Press **Fit** to see:
+
+- the error before (shipped values) and after (tuned);
+- the error **on parts the fit did not see**. Each part is estimated by a fit
+  that left it out, which is the honest figure for a new part;
+- each setting's fitted value and how tightly your parts pin it;
+- the parts still far off, which usually means a wrong input or a measured
+  time that included setup.
+
+Press **Save tuning** to use the values. Every estimate then uses them, and
+the Cycle Time panel says so. **Back to shipped values** undoes it. The fit
+always starts from the shipped values, so re-fitting after adding parts gives
+a fresh answer rather than compounding the last one.
+
+How the fit works:
+
+- It compares estimate and measured time as ratios, so a 2-minute part counts
+  as much as a 2-hour one.
+- It uses a soft loss, so one bad record cannot drag it.
+- It keeps each setting near its shipped value unless your parts give a reason
+  to move it. A setting your parts say nothing about (lathe settings with no
+  lathe parts) stays put.
+
+**From the command line:**
+
+```powershell
+.\pe.ps1 tune --add .\jobs\*.step --material "Aluminum 6061-T6" --operations 2
+# ...fill in measured_min in tuning\parts.csv...
+.\pe.ps1 tune            # fit and report (nothing saved)
+.\pe.ps1 tune --save     # the same, and use the result
+```
+
+`shop_tuning.csv` also takes your own rows for any `shop_profile.csv` key,
+such as `spindle_hp` or `operations`. Mark them `manual`. They survive tool
+updates, unlike edits to the shipped file, and the fit is done on top of them.
 
 ---
 

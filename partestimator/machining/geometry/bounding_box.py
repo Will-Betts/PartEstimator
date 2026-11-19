@@ -395,12 +395,19 @@ def minimum_enclosing_cylinder(points: np.ndarray, hull_data: HullData | None = 
 
     # Final geometry measured against EVERY input point, guaranteeing
     # enclosure even though the search ran on reduced sets.
-    axis_direction = _direction_from_angles(theta, phi)
-    measure_pts = hull_data.all_points
-    volume, radius, height, center2d = _cylinder_for_direction(measure_pts, axis_direction)
+    return cylinder_about(hull_data.all_points, _direction_from_angles(theta, phi))
+
+
+def cylinder_about(points: np.ndarray, direction) -> EnclosingCylinder:
+    """The tightest cylinder round `points` whose axis runs along `direction`
+    -- the bar a part is turned from when it is set that way round."""
+    pts = np.asarray(points, dtype=float).reshape(-1, 3)
+    axis_direction = np.asarray(direction, dtype=float)
+    axis_direction = axis_direction / (np.linalg.norm(axis_direction) or 1.0)
+    volume, radius, height, center2d = _cylinder_for_direction(pts, axis_direction)
 
     u, v = _orthonormal_basis(axis_direction)
-    proj_axis = measure_pts @ axis_direction
+    proj_axis = pts @ axis_direction
     mid = (proj_axis.max() + proj_axis.min()) / 2.0
     axis_point = mid * axis_direction + center2d[0] * u + center2d[1] * v
 

@@ -114,6 +114,23 @@ LOAD_UNLOAD_PER_LB_MIN = 0.08 # heavier parts take longer to handle
 FINISH_TIERS_UIN = (250.0, 125.0, 63.0, 32.0, 16.0)
 
 
+def auto_removal_type(results: dict, profile=None) -> tuple[str, str]:
+    """("mill" or "lathe", why). Round stock with most of its surface turned
+    is lathe work; everything else is milled."""
+    derived_feats = results.get("derived") or {}
+    frac = float(derived_feats.get("turned_area_fraction") or 0.0)
+    stock = results.get("stock")
+    round_stock = (stock.is_round if stock is not None
+                   else results.get("primary") == "cylindrical")
+    threshold = profile.get("turn_auto_fraction", 0.5) if profile else 0.5
+    if round_stock and frac >= threshold:
+        return "lathe", f"Auto: Lathe — round stock, {frac:.0%} of the surface is turned."
+    if round_stock:
+        return "mill", (f"Auto: Mill — round stock, but only {frac:.0%} of the surface is "
+                        f"turned (needs {threshold:.0%}).")
+    return "mill", "Auto: Mill — not round stock."
+
+
 def rpm_from_sfm(sfm: float, diameter_in: float) -> float:
     """RPM = 3.82 x sfm / diameter."""
     if diameter_in <= 0:
@@ -198,7 +215,7 @@ class CycleEstimate:
                          "hand work at the open door — outside the machine cycle"))
         if self.calibration != 1.0:
             rows.append(("Shop calibration", f"x{self.calibration:,.2f}",
-                         "calibrate_overall in shop_profile.csv"))
+                         "calibrate_overall (shop profile or shop tuning)"))
         rows.append(("DOOR TO DOOR", f"{self.door_to_door_minutes:,.2f} min", ""))
         return rows
 

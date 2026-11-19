@@ -247,6 +247,23 @@ def compute_analysis(path: str, options: dict | None = None, progress=None,
     return result
 
 
+def compute_turning(path: str, cylinder, holes, progress=None):
+    """Re-loads the shape and measures its turned profile about `cylinder`'s
+    axis -- for a bar the user has set a different way round than the
+    automatic fit. Re-loaded for the same reason as compute_thin_wall: the
+    face classification needs the shape, which cannot cross processes. The
+    mesh is re-extracted the way compute_analysis does it, so it is the same
+    one the window holds."""
+    if progress is not None:
+        progress(f"Reading {Path(path).name}…")
+    shape = step_io.load_step_file(path)
+    mesh_utils.tessellate(shape)
+    if progress is not None:
+        progress("Measuring the turned profile about the new axis…")
+    points, triangles = mesh_utils.extract_mesh(shape, face_map=mesh_utils.face_map_of(shape))
+    return turning.analyze_turning(shape, cylinder, points, triangles, holes)
+
+
 def compute_thin_wall(path: str, threshold_mm: float, max_search_distance_mm: float,
                        progress=None):
     """Re-loads the shape and runs the thin-wall scan.

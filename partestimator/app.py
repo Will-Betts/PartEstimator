@@ -166,6 +166,7 @@ class UnifiedWindow(QMainWindow):
         self.mach = MachWindow()
         self._embed(self.mach)
         self.mach.open_button.hide()
+        self.mach.fileOpened.connect(self._opened_from_library)
         self.stack.addWidget(self.mach)
 
         outer.addWidget(self.stack, 1)
@@ -199,6 +200,10 @@ class UnifiedWindow(QMainWindow):
         e.triggered.connect(self._export_sheet)
         m.addAction(e)
         m.addSeparator()
+        t = QAction("Shop &tuning...", self)
+        t.setToolTip("The library of measured parts the machining estimate is fitted to.")
+        t.triggered.connect(self._open_tuning)
+        m.addAction(t)
         s = QAction("&Settings...", self)
         s.triggered.connect(self.edit_settings)
         m.addAction(s)
@@ -323,6 +328,24 @@ class UnifiedWindow(QMainWindow):
                 self.sheet.load(self.path)
             else:
                 self.mach._load_and_process(str(self.path))
+
+    def _open_tuning(self) -> None:
+        self.mach.open_tuning()
+
+    def _opened_from_library(self, path: str) -> None:
+        """The tuning library opened a part straight into the Machining tab."""
+        p = Path(path)
+        self.path = p
+        self.detected = None
+        self._loaded_into = {SHEET: None, MACHINED: p}
+        self.lbl_file.setText(p.name)
+        self.setWindowTitle(f"{__appname__} -- {p.name}")
+        self.mode = MACHINED
+        self.mode_tabs.blockSignals(True)
+        self.mode_tabs.setCurrentIndex(PAGE_MACHINED)
+        self.mode_tabs.blockSignals(False)
+        self.stack.setCurrentIndex(PAGE_MACHINED)
+        self._show_banner(MACHINED, "Opened from the shop tuning library, with its saved inputs.")
 
     def _show_banner(self, kind, text: str) -> None:
         self.banner.setStyleSheet(BANNER_STYLE.get(kind, BANNER_STYLE[None]))

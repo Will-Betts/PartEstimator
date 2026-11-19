@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import axis_stats, features, materials
+from . import stock as stock_mod
 
 MM_PER_IN = 25.4
 MM2_PER_IN2 = MM_PER_IN ** 2
@@ -295,21 +296,7 @@ def compute_derived_features(results: dict, material: str = "") -> dict:
     # What actually gets bought and cut -- a better roughing driver than the
     # bounding box, since it includes the real allowances.
     if stock is not None:
-        out["stock_volume_in3"] = float(stock.volume_in3)
-        # One set of columns for both forms, matching the OD/ST, W, L
-        # table. A round bar leaves W at zero because the CSV needs a
-        # number; `stock_is_round` is what distinguishes "no width" from
-        # "zero width", and it is already exported above.
-        out["stock_od_or_thk_in"] = float(stock.thickness_or_diameter_in)
-        out["stock_width_in"] = float(stock.width_in or 0.0)
-        out["stock_length_in"] = float(stock.length_in)
-        # Sheet parts skip the facing operation entirely, which is a real
-        # fork in the cycle-time model rather than a size difference.
-        out["stock_is_sheet"] = 1 if stock.is_sheet else 0
-        if stock.volume_in3 > 0:
-            part_in3 = _in3(volume)
-            out["stock_removal_ratio"] = float((stock.volume_in3 - part_in3) / stock.volume_in3)
-            out["stock_removed_volume_in3"] = float(max(stock.volume_in3 - part_in3, 0.0))
+        out.update(stock_mod.stock_features(stock, _in3(volume)))
 
     # ------------------------------------------------------------ shape
     hull_v = results.get("hull_volume_mm3") or 0.0

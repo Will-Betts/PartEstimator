@@ -23,6 +23,8 @@ htmlcov/
 # Written by the app at runtime
 settings.json
 custom_extrusions.csv
+# Shop tuning library: your own measured parts and fitted settings
+tuning/
 part_estimator.log
 last_error.log
 part_estimator-crash.txt

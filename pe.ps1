@@ -69,6 +69,9 @@ APP
   sheet <step> [options]      Sheet metal flat pattern, DXF, STEP and report.
                               `.\pe.ps1 sheet --help` lists every option.
   calibrate <csv>             Fit machining calibration factors to measured times.
+  tune [--add step...] [--save]
+                              Shop tuning: fit the estimate to your measured parts.
+                              `.\pe.ps1 tune --help` lists every option.
 
 CHECKS
   test [pytest args]          Fast tests: timing model and CLI (pytest, seconds).
@@ -376,7 +379,7 @@ function Invoke-Main([string[]]$ArgList) {
         }
         'gui'  { Invoke-Gui $rest; return }
         'test' { Invoke-Test $rest; return }
-        { $_ -in @('classify', 'sheet', 'calibrate', 'selftest') } {
+        { $_ -in @('classify', 'sheet', 'calibrate', 'tune', 'selftest') } {
             Invoke-Cli $command $rest
             return
         }
