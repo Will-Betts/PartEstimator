@@ -20,6 +20,7 @@ from . import (
     derived,
     edge_convexity,
     edges,
+    extrusions,
     face_scan,
     features,
     hole_probe,
@@ -39,7 +40,38 @@ DEFAULT_OPTIONS = {
     "edges": True,
     "robust_concavity": False,
     "edge_convexity": True,   # concave-edge metric for the ML feature set
+    "extrusion_fit": True,    # open on an extrusion when one beats plate
 }
+
+
+def fit_extrusion(primary, rect_box, cyl, plate_stock, points, triangles,
+                  part_volume_in3, profiles=None):
+    """(shape, name) of the extrusion to open the part on, or None.
+
+    Only for a part that is not round-bar work, and only when a profile
+    holds the whole part and needs less material than the recommended
+    plate: otherwise plate is the simpler buy and stays the default.
+    """
+    if primary != "rectilinear" or rect_box is None or plate_stock is None:
+        return None
+    pts = extrusions._sample(extrusions.surface_samples(points, triangles))
+    pool = extrusions.load_profiles() if profiles is None else profiles
+    prof = extrusions.best_profile(pool, rect_box, cyl, part_volume_in3=part_volume_in3,
+                                   points_mm=pts)
+    if prof is None:
+        return None
+    s = extrusions.extrusion_stock(prof, rect_box, cyl, part_volume_in3=part_volume_in3,
+                                   points_mm=pts)
+    if s is None or not (s.fits and s.enough_material):
+        return None
+    # The profile cannot hold more metal than its own section along the part:
+    # a check that does not depend on how the surface happened to be sampled.
+    if (part_volume_in3 is not None and prof.area_in2 * s.min_length_in
+            < (1.0 - extrusions.VOLUME_SLACK) * part_volume_in3):
+        return None
+    if s.volume_in3 >= plate_stock.volume_in3:
+        return None
+    return prof.shape, prof.name
 
 
 def compute_analysis(path: str, options: dict | None = None, progress=None,
@@ -104,6 +136,16 @@ def compute_analysis(path: str, options: dict | None = None, progress=None,
                if opt["cylinder"] else None)
         primary = "rectilinear" if cyl is None else bounding_box.select_primary(rect_box, cyl)
         stock = stock_mod.compute_stock(primary, rect_box, cyl)
+
+    with stage("Extrusion fit", "Fitting extrusion profiles…"):
+        extrusion = None
+        if opt["extrusion_fit"]:
+            try:
+                extrusion = fit_extrusion(
+                    primary, rect_box, cyl, stock, render_points, render_triangles,
+                    shape_props.volume_mm3 / stock_mod.MM_PER_INCH ** 3)
+            except Exception as exc:  # noqa: BLE001 -- plate stock is a fine fallback
+                emit(f"Extrusion fit skipped: {type(exc).__name__}")
 
     with stage("Face scan", "Analyzing faces…"):
         def _face_progress(done, total):
@@ -175,6 +217,7 @@ def compute_analysis(path: str, options: dict | None = None, progress=None,
         "cylinder": cyl,
         "primary": primary,
         "stock": stock,
+        "extrusion": extrusion,
         "moi_value_mm5": moi_value,
         "gyration_mm": gyration_mm,
         "holes": validated_holes,

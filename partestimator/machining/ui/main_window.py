@@ -46,6 +46,14 @@ from partestimator.ui_common import guard_wheel, material_picker
 
 FINISH_UNITS = ["µin Ra", "µm Ra"]
 
+REMOVAL_TIP = (
+    "Mill: 40-taper machining center, 22 hp.\n"
+    "Lathe: turn-mill with live tooling. Priced as turning -- passes at\n"
+    "constant surface speed, facing, boring, Ra-driven finish feed --\n"
+    "with flats, slots and cross holes done by the live tool.\n\n"
+    "Set automatically when a part opens: round stock with most of its\n"
+    "surface turned opens as Lathe. Change it freely afterwards.")
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -183,6 +191,7 @@ class MainWindow(QMainWindow):
         "edges": True,             # model edges for display
         "robust_concavity": False, # slow global point-in-solid fallback
         "edge_convexity": True,    # concave-edge complexity metric
+        "extrusion_fit": True,     # open on an extrusion when one beats plate
     }
 
     def _analysis_options(self) -> dict:
@@ -252,19 +261,9 @@ class MainWindow(QMainWindow):
         # the other two.
         self.removal_combo = QComboBox()
         self.removal_combo.addItems(["Mill", "Lathe"])
-        self.removal_combo.setToolTip(
-            "Mill: 40-taper machining center, 22 hp.\n"
-            "Lathe: turn-mill with live tooling. Priced as turning -- passes at\n"
-            "constant surface speed, facing, boring, Ra-driven finish feed --\n"
-            "with flats, slots and cross holes done by the live tool.\n\n"
-            "Set automatically when a part opens: round stock with most of its\n"
-            "surface turned opens as Lathe. Change it freely afterwards.")
+        self.removal_combo.setToolTip(REMOVAL_TIP)
         self.removal_combo.currentTextChanged.connect(lambda _t: self._refresh_cycle_time())
         layout.addRow("Removal type:", self.removal_combo)
-        self.lbl_removal_auto = QLabel("")
-        self.lbl_removal_auto.setWordWrap(True)
-        self.lbl_removal_auto.setStyleSheet("color: #555;")
-        layout.addRow("", self.lbl_removal_auto)
 
         finish_row = QHBoxLayout()
         self.finish_value = QDoubleSpinBox()
@@ -332,6 +331,10 @@ class MainWindow(QMainWindow):
             lambda: self.viewer.clear_highlights("stock"))
         self.stock_controls.btn_auto_orient.clicked.connect(
             lambda: self.viewer.clear_highlights())
+        self.stock_controls.orient_dialog.startOver.connect(
+            lambda: self.viewer.clear_highlights())
+        self.stock_controls.orient_dialog.closed.connect(
+            lambda: self.viewer.clear_highlights())
         layout.addRow(self.stock_controls)
 
         self.left_layout.addWidget(box)
@@ -343,7 +346,11 @@ class MainWindow(QMainWindow):
         handbook estimate, not a fitted model, and the export carries it
         alongside the blank measured column so the two can be compared.
         """
-        box = QGroupBox("Estimated Cycle Time (door-to-door)")
+        box = QGroupBox("Cycle Time")
+        box.setToolTip(
+            "Door-to-door estimate from published manufacturer rates at 80%.\n"
+            "A bottom-up estimate, not a fitted model: compare it with your\n"
+            "measured times and tune data/machining_rates.csv.")
         layout = QVBoxLayout(box)
 
         self.lbl_cycle_total = QLabel("—")
@@ -377,14 +384,6 @@ class MainWindow(QMainWindow):
         row.addStretch(1)
         layout.addLayout(row)
 
-        note = QLabel(
-            "Published manufacturer rates at 80%. A bottom-up estimate, not a "
-            "fitted model — compare against your measured times and expect to "
-            "tune data/machining_rates.csv.")
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #555;")
-        layout.addWidget(note)
-
         self.left_layout.addWidget(box)
 
     def _set_view(self, method) -> None:
@@ -411,8 +410,8 @@ class MainWindow(QMainWindow):
             why = (f"Auto: Mill — round stock, but only {frac:.0%} of the surface is "
                    f"turned (needs {threshold:.0%}).")
         else:
-            why = "Auto: Mill — rectangular stock."
-        self.lbl_removal_auto.setText(why)
+            why = "Auto: Mill — not round stock."
+        self.removal_combo.setToolTip(f"{why}\n\n{REMOVAL_TIP}")
 
     def _current_removal_type(self) -> str:
         return self.removal_combo.currentText().strip().lower()
@@ -596,10 +595,6 @@ class MainWindow(QMainWindow):
         form.addRow("Stock weight:", self.lbl_stock_weight)
         layout.addLayout(form)
 
-        self.lbl_stock_rule = QLabel("—")
-        self.lbl_stock_rule.setWordWrap(True)
-        self.lbl_stock_rule.setStyleSheet("color: #555;")
-        layout.addWidget(self.lbl_stock_rule)
         self.left_layout.addWidget(box)
 
     def _copy_stock(self, with_header: bool = False):
@@ -611,7 +606,8 @@ class MainWindow(QMainWindow):
             "Stock copied — paste into Excel", 4000)
 
     def _build_hole_section(self):
-        box = QGroupBox("Hole Surface Area by Diameter (concave cylindrical faces only)")
+        box = QGroupBox("Holes")
+        box.setToolTip("Holes grouped by diameter: concave cylindrical faces only.")
         layout = QVBoxLayout(box)
         self.hole_table = QTableWidget(0, 4)
         self.hole_table.setHorizontalHeaderLabels(["Nominal ⌀", "Holes", "Max depth", "Avg depth"])
@@ -623,17 +619,12 @@ class MainWindow(QMainWindow):
     def _build_features_section(self):
         """The ML feature vector: everything scale-free and
         authoring-independent that the tool can derive."""
-        box = QGroupBox("Derived Features (for cycle-time model training)")
+        box = QGroupBox("Derived Features")
+        box.setToolTip(
+            "For training a cycle-time model: scale-free ratios plus size terms,\n"
+            "excluding anything positional or exporter-dependent. Export appends\n"
+            "one row per part; fill in cycle_time_min from your job records.")
         layout = QVBoxLayout(box)
-
-        note = QLabel(
-            "Scale-free ratios plus size terms, excluding anything positional or "
-            "exporter-dependent. Export appends one row per part — fill in the "
-            "cycle_time_min column from your job records to build a training set."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #555;")
-        layout.addWidget(note)
 
         self.feature_table = QTableWidget(0, 2)
         self.feature_table.setHorizontalHeaderLabels(["Feature", "Value"])
@@ -653,14 +644,15 @@ class MainWindow(QMainWindow):
         thin_row.addWidget(self.thin_threshold_spin)
         self._sync_thin_threshold_spin_to_unit(reset_to_default=True)
         self.thin_wall_button = QPushButton("Run thin-wall scan")
+        self.thin_wall_button.setToolTip(
+            "Optional: adds the minimum wall thickness to the features.\n"
+            "Slow on complex parts, so it is not run when a part opens.")
         self.thin_wall_button.clicked.connect(self._on_run_thin_wall_scan)
         self.thin_wall_button.setEnabled(False)
         thin_row.addWidget(self.thin_wall_button)
         layout.addLayout(thin_row)
 
-        self.lbl_thin_wall = QLabel(
-            "Optional — adds min wall thickness to the feature set. Slow on complex parts."
-        )
+        self.lbl_thin_wall = QLabel("")
         self.lbl_thin_wall.setWordWrap(True)
         self.lbl_thin_wall.setStyleSheet("color: #555;")
         layout.addWidget(self.lbl_thin_wall)
@@ -882,10 +874,11 @@ class MainWindow(QMainWindow):
             emit=False,
             part_volume_in3=(sp.volume_mm3 / 25.4 ** 3) if sp is not None else None,
             points_mm=results.get("render_points"),
-            triangles=results.get("render_triangles"))
+            triangles=results.get("render_triangles"),
+            extrusion=results.get("extrusion"))
         if stock is not None:
             results["stock"] = stock
-        self.lbl_thin_wall.setText("Not run yet — this scan is opt-in since it can be slow on complex parts.")
+        self.lbl_thin_wall.setText("")
 
         self.viewer.display_part(
             results["render_points"], results["render_triangles"], results.get("edge_polylines"),
@@ -1064,9 +1057,6 @@ class MainWindow(QMainWindow):
             self.chk_show_stock.setChecked(True)       # something to click on
         self.viewer.set_click_handler(self._on_view_click)
         self.viewer.set_picking_cursor(True)
-        self.statusBar().showMessage(
-            "Click a flat face of the part." if mode == "part"
-            else "Click a face of the stock box.")
 
     def _part_face_labels(self):
         """Which CAD face each triangle belongs to, worked out on the first
@@ -1085,16 +1075,15 @@ class MainWindow(QMainWindow):
         if mode == "part":
             tri = self.viewer.pick_part_triangle(x, y)
             if tri is None:
-                self.statusBar().showMessage("That missed the part. Click a flat face of it.")
+                self.stock_controls.pick_problem("That missed the part.")
                 return
             labels = self._part_face_labels()
             face = orientation.planar_face(self.results["render_points"],
                                            self.results["render_triangles"], labels, tri)
             if face is None:
-                self.statusBar().showMessage("That face is curved. Click a flat face.")
+                self.stock_controls.pick_problem("That face is curved.")
                 return
             self.viewer.highlight_triangles(np.flatnonzero(labels == labels[tri]), tag="part")
-            self.statusBar().clearMessage()
             self.stock_controls.set_part_face(face[0])
             return
 
@@ -1109,13 +1098,12 @@ class MainWindow(QMainWindow):
             extents = stock_box_extents(stock, rect)
         hit = orientation.ray_box_face(origin, direction, rect, extents)
         if hit is None:
-            self.statusBar().showMessage("That missed the box. Click a face of the stock.")
+            self.stock_controls.pick_problem("That missed the stock.")
             return
         k, sign = hit
         self.viewer.highlight_quad(
             orientation.box_face_corners(rect.center_mm, rect.axes, extents, k, sign),
             tag="stock")
-        self.statusBar().clearMessage()
         self.stock_controls.set_stock_face(k)
 
     def _on_material_changed(self, _text: str):
@@ -1156,7 +1144,7 @@ class MainWindow(QMainWindow):
             for col in range(3):
                 self.stock_table.setItem(0, col, QTableWidgetItem("—"))
             self.lbl_stock_volume.setText("—")
-            self.lbl_stock_rule.setText("—")
+            self.stock_table.setToolTip("—")
             return
 
         for col, (_label, value) in enumerate(stock.table_rows()):
@@ -1166,7 +1154,7 @@ class MainWindow(QMainWindow):
 
         if stock.is_extrusion:
             p = stock.profile
-            self.lbl_stock_rule.setText(
+            self.stock_table.setToolTip(
                 f'Extrusion: {p.describe()}, section {p.area_in2:.3f} in² '
                 f'({"as listed in the standard" if p.listed_area_in2 else "sharp corners"}). '
                 f'OD/ST and W are the profile\'s outer envelope. '
@@ -1174,24 +1162,24 @@ class MainWindow(QMainWindow):
                 f'{stock.recommended_length_in:.3f}" (part + 1.00", rounded up to the '
                 f'next 1/4").')
         elif stock.basis == stock_mod.MINIMUM:
-            self.lbl_stock_rule.setText(
+            self.stock_table.setToolTip(
                 "Minimum: the part's own bounding box, with no cleanup or "
                 "work-holding allowance. Chosen in Part Inputs.")
         elif stock.basis == stock_mod.CUSTOM:
-            self.lbl_stock_rule.setText("Custom size, entered in Part Inputs.")
+            self.stock_table.setToolTip("Custom size, entered in Part Inputs.")
         elif stock.is_round:
-            self.lbl_stock_rule.setText(
+            self.stock_table.setToolTip(
                 'Barstock. OD: part diameter + 0.125", rounded up to the next 1/4". '
                 'L: part length + 1.00", rounded up to the next 1/4". '
                 'W is blank — a round bar has no second cross dimension.')
         elif stock.is_sheet:
-            self.lbl_stock_rule.setText(
+            self.stock_table.setToolTip(
                 f'Sheet (part is ≤ {stock_mod.SHEET_THICKNESS_MAX_IN:.3f}" thick). '
                 'ST is the part thickness as-is: sheet is bought to gauge and the '
                 'faces are not machined. W and L: part + 1.00", rounded up to the '
                 'next 1/4".')
         else:
-            self.lbl_stock_rule.setText(
+            self.stock_table.setToolTip(
                 'Plate. ST: part thickness + 0.125" for cleanup, rounded up to the '
                 'next 1/4". W and L: part + 1.00" for work-holding, rounded up to '
                 'the next 1/4".')

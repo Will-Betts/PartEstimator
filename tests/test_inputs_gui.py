@@ -240,14 +240,15 @@ class TestStockControls(QtCase):
         self.assertAlmostEqual(s.min_length_in, 6.0)
         self.assertAlmostEqual(self.w.spin_l.value(), 7.0)
         self.assertFalse(self.w.spin_a.isEnabled())
-        self.assertIn("minimum 6.000", self.w.lbl_status.text())
+        self.assertIn("Minimum 6.000", self.w.spin_l.toolTip())
+        self.assertFalse(self.w.lbl_status.isVisibleTo(self.w))     # nothing wrong
 
     def test_a_solid_part_gets_solid_bar_not_an_angle(self):
         self.w.set_part(box(6.0, 0.9, 0.9), None, "rectilinear",
                         part_volume_in3=6.0 * 0.9 * 0.9)
         self.w.type_combo.setCurrentText(self.sp.EXTRUSION)
         s = self.emitted[-1]
-        self.assertEqual((s.profile.shape, s.profile.name), ("flat_bar", "1 x 1 square"))
+        self.assertEqual((s.profile.shape, s.profile.name), ("hex_bar", "1-1/2 A/F"))
         self.assertTrue(s.enough_material)
 
     def test_extrusion_length_snaps_and_edits(self):
@@ -280,7 +281,7 @@ class TestStockControls(QtCase):
         # The box shows the part number and size, not the internal key.
         self.assertTrue(self.w.profile.line.text().startswith("AND10134-1205  Angle"))
         self.assertAlmostEqual(s.profile.area_in2, 0.202)
-        self.assertIn("AMS10134-1205", self.w.lbl_status.text())
+        self.assertIn("AMS10134-1205", self.w.profile.toolTip())
 
     def test_custom_library_reloads_into_the_picker(self):
         import shutil
@@ -306,7 +307,7 @@ class TestStockControls(QtCase):
             fh.write("SHOP-7,angle,1.5,1.25,,0.1,,,,our die\n")
             fh.write("BROKEN,angle,1.5,,,,,,,\n")
         self.w.reload_custom_library()
-        self.assertIn("1 profile.", self.w.lbl_custom.text())
+        self.assertIn("1 profile.", self.w.btn_reload_custom.toolTip())
         self.assertIn("Skipped line", self.w.lbl_custom.text())
         self.assertEqual(self.w.profile.matches("custom shop-7"), ["angle|SHOP-7"])
         self.w.profile.setCurrentText("angle|SHOP-7")
@@ -343,6 +344,7 @@ class TestStockOrientation(QtCase):
         self.w.pickRequested.connect(self.picks.append)
         self.w.orientationChanged.connect(lambda: self.turned.append(True))
         self.w.set_part(self.skew, None, "rectilinear", points_mm=self.pts)
+        self.addCleanup(self.w.orient_dialog.close)
 
     def dims(self):
         return sorted(float(e) / MM for e in self.w.rect_box().extents_mm)
@@ -351,36 +353,59 @@ class TestStockOrientation(QtCase):
         """The row of the current box nearest the part's bottom face normal."""
         return int(self.np.argmax(abs(self.w.rect_box().axes @ [0, 0, 1])))
 
-    def test_opens_on_the_automatic_box(self):
+    def step_text(self):
+        return self.w.orient_dialog.lbl_step.text()
+
+    def test_one_button_opens_on_the_automatic_box(self):
         self.assertIs(self.w.rect_box(), self.skew)
         self.assertFalse(self.w.is_reoriented())
-        self.assertIn("Automatic", self.w.lbl_orient.text())
-        self.assertTrue(self.w.orient_box.isVisibleTo(self.w))
+        self.assertTrue(self.w.btn_orient.isEnabled())
+        self.assertTrue(self.w.orient_row.isVisibleTo(self.w))
+        self.assertFalse(self.w.lbl_oriented.isVisibleTo(self.w))
+        self.assertFalse(self.w.orient_dialog.isVisible())
 
-    def test_part_face_and_stock_face_square_the_part_up(self):
-        self.w.btn_pick_part.click()
+    def test_the_window_walks_through_part_face_then_stock_face(self):
+        self.w.btn_orient.click()
+        self.assertTrue(self.w.orient_dialog.isVisible())
         self.assertEqual(self.picks, ["part"])
-        self.w.set_part_face([0, 0, -1])
-        self.assertFalse(self.w.btn_pick_part.isChecked())
-        self.assertEqual(self.picks[-1], "")
-        self.assertIn("Part face: picked", self.w.lbl_picks.text())
+        self.assertIn("flat face of the part", self.step_text())
 
-        self.w.btn_pick_stock.click()
+        self.w.set_part_face([0, 0, -1])
+        self.assertEqual(self.picks[-1], "stock")
+        self.assertIn("face of the stock", self.step_text())
+
         self.w.set_stock_face(self.bottom_axis())
         for got, want in zip(self.dims(), [1.0, 4.0, 6.0]):
             self.assertAlmostEqual(got, want, places=6)
         self.assertTrue(self.w.is_reoriented())
         self.assertTrue(self.turned)
-        self.assertIn("top face", self.w.lbl_orient.text())
+        self.assertIn("top face", self.step_text())
+        self.assertEqual(self.picks[-1], "part")           # ready for another pair
+        self.assertTrue(self.w.lbl_oriented.isVisibleTo(self.w))
         s = self.emitted[-1]
         self.assertEqual((s.thickness_or_diameter_in, s.width_in, s.length_in),
                          (1.25, 5.0, 7.0))
 
-    def test_picking_one_button_releases_the_other(self):
-        self.w.btn_pick_part.click()
-        self.w.btn_pick_stock.click()
-        self.assertFalse(self.w.btn_pick_part.isChecked())
-        self.assertEqual(self.picks, ["part", "stock"])
+    def test_a_stock_face_first_does_nothing(self):
+        self.w.btn_orient.click()
+        self.w.set_stock_face(0)
+        self.assertIs(self.w.rect_box(), self.skew)
+        self.assertEqual(self.w.picking(), "part")
+
+    def test_a_bad_click_asks_again(self):
+        self.w.btn_orient.click()
+        self.w.pick_problem("That face is curved.")
+        self.assertIn("curved", self.step_text())
+        self.assertIn("flat face of the part", self.step_text())
+
+    def test_start_over_and_closing(self):
+        self.w.btn_orient.click()
+        self.w.set_part_face([0, 0, 1])
+        self.w.orient_dialog.btn_start_over.click()
+        self.assertEqual(self.w.picking(), "part")
+        self.w.orient_dialog.btn_close.click()
+        self.assertEqual(self.w.picking(), "")
+        self.assertEqual(self.picks[-1], "")
 
     def test_fine_turns_about_the_stock_axes(self):
         self.w.align([0, 0, 1], self.bottom_axis())
@@ -389,8 +414,7 @@ class TestStockOrientation(QtCase):
             self.assertAlmostEqual(got, want, places=6)
         self.w.spin_rz.setValue(30.0)
         self.assertGreater(self.dims()[2], 6.5)
-        self.assertIn("Z +30°", self.w.lbl_orient.text())
-        self.assertIn("larger than the automatic fit", self.w.lbl_orient.text())
+        self.assertIn("Z +30°", self.w.lbl_oriented.toolTip())
         self.w.spin_rz.setValue(0.0)
         self.w.spin_rx.setValue(90.0)            # about the length: stands it on edge
         ext = [float(e) / MM for e in self.w.rect_box().extents_mm]
@@ -402,17 +426,18 @@ class TestStockOrientation(QtCase):
         part is longest that way, so it can only be the stock's end."""
         end_normal = self.o.rotation_matrix(2, 20) @ [1, 0, 0]
         self.w.align(end_normal, self.bottom_axis())
-        text = self.w.lbl_orient.text()
+        text = self.step_text()
         self.assertIn("end face", text)
         self.assertIn("you picked its top face", text)
 
-    def test_reset_goes_back_to_automatic(self):
+    def test_automatic_goes_back(self):
         self.w.align([0, 0, 1], self.bottom_axis())
         self.w.spin_ry.setValue(10.0)
         self.w.btn_auto_orient.click()
         self.assertIs(self.w.rect_box(), self.skew)
         self.assertFalse(self.w.is_reoriented())
         self.assertEqual(self.w.angles(), (0.0, 0.0, 0.0))
+        self.assertFalse(self.w.lbl_oriented.isVisibleTo(self.w))
 
     def test_custom_size_is_kept_when_turned(self):
         self.w.spin_a.setValue(2.0)
@@ -422,12 +447,14 @@ class TestStockOrientation(QtCase):
         self.assertAlmostEqual(self.emitted[-1].thickness_or_diameter_in, 2.0)
 
     def test_round_bar_hides_it_and_a_new_part_resets_it(self):
+        self.w.btn_orient.click()
         self.w.align([0, 0, 1], self.bottom_axis())
         self.w.set_part(box(4.0, 2.0, 2.0), cyl(2.0, 4.0), "cylindrical")
-        self.assertFalse(self.w.orient_box.isVisibleTo(self.w))
+        self.assertFalse(self.w.orient_row.isVisibleTo(self.w))
+        self.assertFalse(self.w.orient_dialog.isVisible())
         self.assertFalse(self.w.is_reoriented())
         # No vertices given: only the automatic box is on offer.
-        self.assertFalse(self.w.btn_pick_part.isEnabled())
+        self.assertFalse(self.w.btn_orient.isEnabled())
 
     def test_an_extrusion_follows_the_turn(self):
         self.w.type_combo.setCurrentText(self.sp.EXTRUSION)
@@ -436,6 +463,36 @@ class TestStockOrientation(QtCase):
         after = self.emitted[-1]
         self.assertTrue(after.is_extrusion)
         self.assertLessEqual(after.volume_in3, before.volume_in3 + 1e-9)
+
+
+@unittest.skipUnless(HAVE_QT, "needs PySide6")
+class TestOpensOnAnExtrusion(QtCase):
+    """The analysis names a profile that beats plate: the part opens on it."""
+
+    def setUp(self):
+        from partestimator.machining.ui import stock_panel as sp
+
+        self.sp = sp
+        self.w = sp.StockControls()
+
+    def test_a_fitted_profile_is_the_starting_stock(self):
+        s = self.w.set_part(box(6.0, 0.9, 0.9), None, "rectilinear",
+                            extrusion=("angle", "1 x 1 x 1/8"))
+        self.assertEqual(self.w.type_combo.currentText(), self.sp.EXTRUSION)
+        self.assertTrue(s.is_extrusion)
+        self.assertEqual((s.profile.shape, s.profile.name), ("angle", "1 x 1 x 1/8"))
+        self.assertEqual(self.w.profile.currentText(), "angle|1 x 1 x 1/8")
+
+    def test_none_or_an_unknown_profile_opens_on_plate(self):
+        for extrusion in (None, ("angle", "no such size")):
+            s = self.w.set_part(box(6.0, 0.9, 0.9), None, "rectilinear", extrusion=extrusion)
+            self.assertEqual(self.w.type_combo.currentText(), self.sp.PLATE)
+            self.assertEqual(s.kind, "rectilinear")
+
+    def test_round_work_stays_on_round_bar(self):
+        s = self.w.set_part(box(4.0, 2.0, 2.0), cyl(2.0, 4.0), "cylindrical",
+                            extrusion=("angle", "1 x 1 x 1/8"))
+        self.assertTrue(s.is_round)
 
 
 if __name__ == "__main__":

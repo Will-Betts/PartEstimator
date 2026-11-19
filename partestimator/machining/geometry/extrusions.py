@@ -11,7 +11,6 @@ defined by shape and nominal dimensions (inches):
   tee          flange width     overall height   stem thick.    flange thick.
   rect_tube    width            height           wall
   round_tube   OD                                wall
-  flat_bar     width            thickness
   hex_bar      across flats
 
 Cross-section area is computed from those dimensions with SHARP corners:
@@ -94,7 +93,6 @@ SHAPES = {
     "tee": "Tee",
     "rect_tube": "Rectangular / square tube",
     "round_tube": "Round tube",
-    "flat_bar": "Flat / square bar",
     "hex_bar": "Hex bar",
     "zee": "Zee",
     "bulb_angle": "Bulb angle",
@@ -171,8 +169,6 @@ class ExtrusionProfile:
                     f"{f(2 * self.r)} bulb")
         if s in ("round_tube",):
             return f"{f(self.a)} OD x {f(self.t)} wall"
-        if s in ("flat_bar",):
-            return f"{f(self.a)} x {f(self.b)}"
         if s in ("hex_bar",):
             return f"{f(self.a)} A/F"
         return f"{f(self.a)} x {f(self.b)} x {f(self.t)}"
@@ -205,8 +201,6 @@ class ExtrusionProfile:
             return a * b - (a - 2.0 * t) * (b - 2.0 * t)
         if s == "round_tube":
             return math.pi / 4.0 * (a ** 2 - (a - 2.0 * t) ** 2)
-        if s == "flat_bar":
-            return a * b
         if s == "hex_bar":
             return math.sqrt(3.0) / 2.0 * a ** 2
         raise ValueError(f"unknown extrusion shape {s!r}")
@@ -305,8 +299,6 @@ class ExtrusionProfile:
             return [_rect(ha, hb), _rect(ha - t, hb - t)]
         if s == "round_tube":
             return [_circle(ha), _circle(ha - t)]
-        if s == "flat_bar":
-            return [_rect(ha, hb)]
         if s == "hex_bar":
             r = a / math.sqrt(3.0)
             return [[(r * math.cos(k * math.pi / 3.0), r * math.sin(k * math.pi / 3.0))
@@ -525,7 +517,6 @@ CUSTOM_TEMPLATE = """\
 #   tee          flange width   overall height               stem   flange
 #   rect_tube    width          height                       wall
 #   round_tube   OD                                          wall
-#   flat_bar     width          thickness
 #   hex_bar      across flats
 #   zee          web height     bottom flange   top flange   thick.
 #   bulb_angle   leg with bulb  plain leg                    thick.         bulb radius
