@@ -85,6 +85,24 @@ def _child_thin_wall(project_root: str, path: str, threshold_mm: float,
         queue.put((_ERROR, (type(exc).__name__, str(exc), traceback.format_exc())))
 
 
+def _child_turning(project_root: str, path: str, cylinder, holes, queue) -> None:
+    try:
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        from partestimator.machining.geometry import pipeline
+
+        def progress(msg):
+            try:
+                queue.put((_PROGRESS, msg))
+            except Exception:  # noqa: BLE001
+                pass
+
+        result = pipeline.compute_turning(path, cylinder, holes, progress=progress)
+        queue.put((_RESULT, result))
+    except Exception as exc:  # noqa: BLE001
+        queue.put((_ERROR, (type(exc).__name__, str(exc), traceback.format_exc())))
+
+
 class _QueuePump(QObject):
     """Blocks on the child's queue and re-emits entries as Qt signals."""
 
@@ -153,6 +171,10 @@ class AnalysisRunner(QObject):
 
     def start_thin_wall(self, path: str, threshold_mm: float, max_distance_mm: float):
         self._start(_child_thin_wall, (path, threshold_mm, max_distance_mm))
+
+    def start_turning(self, path: str, cylinder, holes):
+        """The turned profile about `cylinder`'s axis (a TurningGeometry)."""
+        self._start(_child_turning, (path, cylinder, list(holes or [])))
 
     def _start(self, entry, args):
         self._cancelled = False

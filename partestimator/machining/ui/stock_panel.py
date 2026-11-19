@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from partestimator.machining.geometry import bounding_box as bb
 from partestimator.machining.geometry import extrusions as ex
 from partestimator.machining.geometry import orientation as orient
 from partestimator.machining.geometry import stock as st
@@ -31,6 +32,8 @@ KIND_OF = {PLATE: "rectilinear", ROUND: "cylindrical"}
 
 STEP_PART = "Click a <b>flat face of the part</b> in the 3D view."
 STEP_STOCK = "Now click the <b>face of the stock</b> it should lie against."
+STEP_BAR = ("Click a <b>flat face of the part</b> to set square to the bar: it ends up "
+            "parallel to the bar's ends, and the bar runs along its normal.")
 
 CUSTOM_GROUP = "Custom library"
 
@@ -154,6 +157,10 @@ class StockControls(QWidget):
         self._part_normal = None
         self._stock_axis = None
         self._pick_step = ""           # "part", "stock" or "" (not picking)
+        # Round bar keeps its own orientation: which way the bar's axis runs.
+        self._auto_cyl = None
+        self._cyl_oriented = False
+        self._cyl_how = ""
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -281,8 +288,16 @@ class StockControls(QWidget):
         sized from), or None."""
         return self._rect
 
+    def cylinder(self):
+        """The bar round the part in its current orientation (what round
+        stock is sized from), or None."""
+        return self._cyl
+
     def is_reoriented(self) -> bool:
-        return self._oriented
+        return self._cyl_oriented if self._is_round() else self._oriented
+
+    def _is_round(self) -> bool:
+        return self.type_combo.currentText() == ROUND
 
     def angles(self) -> tuple[float, float, float]:
         return (self.spin_rx.value(), self.spin_ry.value(), self.spin_rz.value())
@@ -293,6 +308,7 @@ class StockControls(QWidget):
         if not d.isVisible():
             top = self.window()
             d.move(top.geometry().topLeft() + top.rect().center() / 2)
+        d.set_round(self._is_round())
         d.show()
         d.raise_()
         self._start_picking()
@@ -303,6 +319,9 @@ class StockControls(QWidget):
 
     def set_part_face(self, normal) -> None:
         """A flat face of the part was picked: its outward normal."""
+        if self._is_round():
+            self.square_to_bar(normal)
+            return
         self._part_normal = orient._unit(normal)
         self._stock_axis = None
         self._set_step("stock")
@@ -322,7 +341,8 @@ class StockControls(QWidget):
 
     def pick_problem(self, message: str) -> None:
         """A click that picked nothing usable: say so, and ask again."""
-        step = STEP_STOCK if self._pick_step == "stock" else STEP_PART
+        step = (STEP_STOCK if self._pick_step == "stock"
+                else STEP_BAR if self._is_round() else STEP_PART)
         self.orient_dialog.set_step(f"<span style='color:#b45309'>{message}</span> {step}")
 
     def align(self, part_normal, stock_axis: int) -> None:
@@ -349,11 +369,32 @@ class StockControls(QWidget):
         self._set_angles((0.0, 0.0, 0.0))
         self._reorient()
 
+    def square_to_bar(self, normal) -> None:
+        """Run the bar along this face normal: the face lies parallel to the
+        bar's ends, and the bar is the tightest one round the part that way."""
+        if self._all_points is None:
+            return
+        self._cyl = bb.cylinder_about(self._all_points, orient._unit(normal))
+        self._cyl_oriented = True
+        self._cyl_how = "Bar axis set square to the picked face (parallel to the bar's ends)."
+        self.orient_dialog.set_step(self._cyl_how + "<br><br>" + STEP_BAR)
+        self._show_orientation()
+        self.orientationChanged.emit()
+        self._restock()
+
     def reset_orientation(self) -> None:
         """Back to the automatic, smallest-volume fit."""
         self._part_normal = self._stock_axis = None
         if self._pick_step:
             self._start_picking()
+        if self._is_round():
+            self._cyl = self._auto_cyl
+            self._cyl_oriented = False
+            self._cyl_how = ""
+            self._show_orientation()
+            self.orientationChanged.emit()
+            self._restock()
+            return
         if self._auto_rect is None:
             return
         self._base_axes = orient.sorted_frame(self._auto_rect)
@@ -374,7 +415,9 @@ class StockControls(QWidget):
         `extrusion`, a (shape, name) the analysis found holds the part with
         less material than plate, opens it on that profile instead."""
         self._rect, self._cyl = rect_box, cylinder
-        self._auto_rect = rect_box
+        self._auto_rect, self._auto_cyl = rect_box, cylinder
+        self._cyl_oriented = False
+        self._cyl_how = ""
         self._part_volume = part_volume_in3
         self._points = ex._sample(ex.surface_samples(points_mm, triangles))
         # Every vertex, not a sample: a re-oriented box must still enclose
@@ -388,7 +431,8 @@ class StockControls(QWidget):
         self.orient_dialog.close()
         self.cancel_picking()
         self._set_angles((0.0, 0.0, 0.0))
-        self.btn_orient.setEnabled(rect_box is not None and self._all_points is not None)
+        self.btn_orient.setEnabled(self._all_points is not None
+                                   and (rect_box is not None or cylinder is not None))
         self.setEnabled(rect_box is not None or cylinder is not None)
         round_ok = cylinder is not None
         self.type_combo.model().item(1).setEnabled(round_ok)
@@ -405,9 +449,24 @@ class StockControls(QWidget):
         self._apply(stock, emit=emit)
         return stock
 
+    def set_stock(self, stock, emit: bool = True) -> None:
+        """Show this stock (e.g. one saved in the tuning library) as if it had
+        been picked here."""
+        if stock is None:
+            return
+        kind = EXTRUSION if stock.is_extrusion else ROUND if stock.is_round else PLATE
+        self._updating = True
+        self.type_combo.setCurrentText(kind)
+        if stock.is_extrusion and stock.profile is not None:
+            self.profile.setCurrentText(_value(stock.profile))
+        self._updating = False
+        self._show_for_type()
+        self._apply(stock, emit=emit)
+
     def clear(self) -> None:
         self._rect = self._cyl = self._stock = self._part_volume = self._points = None
-        self._auto_rect = self._all_points = self._base_axes = None
+        self._auto_rect = self._all_points = self._base_axes = self._auto_cyl = None
+        self._cyl_oriented = False
         self._part_normal = self._stock_axis = None
         self._oriented = False
         self.orient_dialog.close()
@@ -475,7 +534,7 @@ class StockControls(QWidget):
 
     def _start_picking(self) -> None:
         self._part_normal = self._stock_axis = None
-        self.orient_dialog.set_step(STEP_PART)
+        self.orient_dialog.set_step(STEP_BAR if self._is_round() else STEP_PART)
         self._set_step("part")
 
     def _set_step(self, step: str) -> None:
@@ -518,18 +577,26 @@ class StockControls(QWidget):
         kind = self.type_combo.currentText()
         if kind == EXTRUSION:
             self._apply(self._extrusion(None))
-        elif kind == PLATE:
+        else:
+            # Same kind and basis; a size typed in by hand is kept as typed.
+            want_round = kind == ROUND
             basis = self._stock.basis if self._stock is not None else st.RECOMMENDED
-            if basis == st.CUSTOM and self._stock is not None and not self._stock.is_round:
+            if (basis == st.CUSTOM and self._stock is not None
+                    and self._stock.is_round == want_round):
                 self._apply(st.classify_basis(self._stock, self._rect, self._cyl))
             else:
-                self._apply(st.snap("rectilinear", basis if basis != st.CUSTOM
-                                    else st.RECOMMENDED, self._rect, self._cyl))
+                self._apply(st.snap(KIND_OF[kind], basis if basis in
+                                    (st.RECOMMENDED, st.MINIMUM) else st.RECOMMENDED,
+                                    self._rect, self._cyl))
 
     def _show_orientation(self) -> None:
         if not hasattr(self, "orient_row"):
             return
-        self.orient_row.setVisible(self.type_combo.currentText() != ROUND)
+        self.orient_row.setVisible(True)
+        if self._is_round():
+            self.lbl_oriented.setVisible(self._cyl_oriented)
+            self.lbl_oriented.setToolTip(self._cyl_how)
+            return
         self.lbl_oriented.setVisible(self._oriented)
         if self._oriented:
             turns = [f"{n} {a:+g}°" for n, a in zip("XYZ", self.angles()) if abs(a) > 1e-9]
@@ -584,7 +651,11 @@ class StockControls(QWidget):
         prof = self._current_profile()
         if prof is None:
             return None
-        return ex.extrusion_stock(prof, self._rect, self._cyl, length_in=length_in,
+        return self.extrusion_for(prof, length_in)
+
+    def extrusion_for(self, profile, length_in):
+        """`profile` cut to `length_in` and placed on the current part."""
+        return ex.extrusion_stock(profile, self._rect, self._cyl, length_in=length_in,
                                   part_volume_in3=self._part_volume, points_mm=self._points)
 
     def _best_profile(self):
@@ -614,9 +685,10 @@ class StockControls(QWidget):
         # A profile's section is fixed by the catalog; only its length is chosen.
         self.spin_a.setEnabled(kind != EXTRUSION)
         self.spin_b.setEnabled(kind != EXTRUSION)
-        if kind == ROUND:                  # a bar has no faces to line up
-            self.orient_dialog.close()
-            self.cancel_picking()
+        if self.orient_dialog.isVisible():
+            # Plate and bar are set differently; start over in the right mode.
+            self.orient_dialog.set_round(kind == ROUND)
+            self._start_picking()
         self._show_orientation()
 
     def _apply(self, stock, emit: bool = True, reflect: bool = True) -> None:

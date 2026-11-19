@@ -7,6 +7,10 @@ clicked in the view while it is up. Two things, in one place:
            should lie against; the two are made parallel
   rotate   turn the part about the stock's X, Y or Z axis, in degrees
 
+On round bar there is one thing to set: which way the bar runs. Click a flat
+face of the part and the bar's axis is set square to it, so that face lies
+parallel to the bar's ends. Turning about the axes does not apply.
+
 It holds only widgets. StockControls owns the orientation and drives it.
 """
 from __future__ import annotations
@@ -49,7 +53,7 @@ class OrientationDialog(QDialog):
         self.setWindowTitle("Part orientation")
         lay = QVBoxLayout(self)
 
-        faces = QGroupBox("Make two faces parallel")
+        faces = self.faces = QGroupBox("Make two faces parallel")
         fl = QVBoxLayout(faces)
         self.lbl_step = QLabel()
         self.lbl_step.setWordWrap(True)
@@ -64,7 +68,7 @@ class OrientationDialog(QDialog):
         fl.addLayout(row)
         lay.addWidget(faces)
 
-        turn = QGroupBox("Rotate part")
+        turn = self.turn = QGroupBox("Rotate part")
         grid = QGridLayout(turn)
         self.spins = []
         for col, (axis, along) in enumerate(AXES):
@@ -90,6 +94,16 @@ class OrientationDialog(QDialog):
         self.btn_start_over.clicked.connect(self.startOver.emit)
         self.btn_automatic.clicked.connect(self.automatic.emit)
         self.btn_close.clicked.connect(self.close)
+
+    def set_round(self, round_bar: bool) -> None:
+        """Round bar: only the face square to the bar's axis is picked."""
+        self.faces.setTitle("Set a face square to the bar" if round_bar
+                            else "Make two faces parallel")
+        self.turn.setVisible(not round_bar)
+        self.btn_automatic.setToolTip(
+            "Back to the smallest bar round the part." if round_bar
+            else "Back to the smallest box round the part.")
+        self.adjustSize()
 
     def set_step(self, html: str) -> None:
         self.lbl_step.setText(html)

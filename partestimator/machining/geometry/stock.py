@@ -267,6 +267,33 @@ def snap(kind: str, basis: str, rect_box, cylinder) -> StockSize | None:
     return rectilinear_stock(rect_box.extents_mm)
 
 
+def stock_features(stock: StockSize, part_volume_in3: float) -> dict:
+    """The feature-vector columns that come from the chosen stock.
+
+    Shared by geometry/derived.py and the tuning library, which re-applies a
+    part's stock to its captured geometry without the geometry itself.
+    """
+    out = {
+        "stock_is_round": 1 if stock.is_round else 0,
+        "stock_is_extrusion": 1 if stock.is_extrusion else 0,
+        "stock_volume_in3": float(stock.volume_in3),
+        # One set of columns for both forms, matching the OD/ST, W, L table.
+        # A round bar leaves W at zero because the CSV needs a number;
+        # `stock_is_round` is what distinguishes "no width" from "zero width".
+        "stock_od_or_thk_in": float(stock.thickness_or_diameter_in),
+        "stock_width_in": float(stock.width_in or 0.0),
+        "stock_length_in": float(stock.length_in),
+        # Sheet parts skip the facing operation entirely, which is a real
+        # fork in the cycle-time model rather than a size difference.
+        "stock_is_sheet": 1 if stock.is_sheet else 0,
+    }
+    if stock.volume_in3 > 0:
+        out["stock_removal_ratio"] = float((stock.volume_in3 - part_volume_in3)
+                                           / stock.volume_in3)
+        out["stock_removed_volume_in3"] = float(max(stock.volume_in3 - part_volume_in3, 0.0))
+    return out
+
+
 def same_size(a: StockSize | None, b: StockSize | None) -> bool:
     if a is None or b is None or a.kind != b.kind:
         return False

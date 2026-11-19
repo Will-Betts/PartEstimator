@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from partestimator.machining.geometry import cycle_time, derived, export, features, materials, rates, shop, step_io
+from partestimator.machining import tuning
 from partestimator.machining.geometry import orientation
 from partestimator.machining.geometry import stock as stock_mod
 from partestimator.machining.geometry.materials import MATERIALS
@@ -56,6 +58,10 @@ REMOVAL_TIP = (
 
 
 class MainWindow(QMainWindow):
+    #: A file was opened from here rather than by the window around it (the
+    #: tuning library's "Open in Machining tab"): its path.
+    fileOpened = Signal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("STEP Machining Geometry Estimator")
@@ -67,6 +73,9 @@ class MainWindow(QMainWindow):
         # Live runners; must stay referenced while their process runs.
         self._runner = None
         self._thin_runner = None
+        # Re-measures the turned profile when the bar is set another way round.
+        self._turn_runner = None
+        self._auto_turning = None
 
         # Loaded once. A missing or malformed rate file must not stop the
         # geometry side of the app from working, so this degrades to
@@ -78,11 +87,21 @@ class MainWindow(QMainWindow):
             self._rate_table = rates.load_rates()
         except Exception as exc:  # noqa: BLE001
             self._rate_error = f"{type(exc).__name__}: {exc}"
+        # The shipped shop profile with this shop's own tuning laid over it
+        # (machining/tuning.py). A broken tuning file falls back to shipped.
+        self._tuning_state = None
         try:
-            self._shop_profile = shop.load_profile()
+            self._shop_profile, self._tuning_state = tuning.load_tuned_profile()
         except Exception as exc:  # noqa: BLE001
+            try:
+                self._shop_profile = shop.load_profile()
+            except Exception as exc2:  # noqa: BLE001
+                exc = exc2
             self._rate_error = (self._rate_error + "  ").strip() + \
                 f"shop profile: {type(exc).__name__}: {exc}"
+        self._tuning_window = None
+        # A library part to show with its saved inputs once its analysis is in.
+        self._pending_entry = None
 
         self._build_ui()
         guard_wheel(self)
@@ -184,15 +203,8 @@ class MainWindow(QMainWindow):
 
     # Analysis settings are fixed -- these were the chosen defaults, and the
     # panel that exposed them has been removed. Edit here to change them.
-    ANALYSIS_OPTIONS = {
-        "oriented_box": True,      # tightest stock size
-        "cylinder": True,          # round-stock fit
-        "undercut": False,         # expensive, coarse heuristic
-        "edges": True,             # model edges for display
-        "robust_concavity": False, # slow global point-in-solid fallback
-        "edge_convexity": True,    # concave-edge complexity metric
-        "extrusion_fit": True,     # open on an extrusion when one beats plate
-    }
+    # Shared with the tuning library, whose cached analyses must match.
+    ANALYSIS_OPTIONS = dict(tuning.ANALYSIS_OPTIONS)
 
     def _analysis_options(self) -> dict:
         return dict(self.ANALYSIS_OPTIONS)
@@ -294,6 +306,7 @@ class MainWindow(QMainWindow):
         layout.addRow("Tightest tolerance:", self.tolerance_value)
 
         self.finish_value.valueChanged.connect(lambda _v: self._refresh_cycle_time())
+        self.finish_unit_combo.currentTextChanged.connect(lambda _t: self._refresh_cycle_time())
 
         # Setups cannot be inferred from the solid, and getting it wrong
         # scales the whole estimate -- a two-op part estimated as one op
@@ -382,7 +395,25 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_copy_cycle)
         row.addWidget(self.btn_show_rates)
         row.addStretch(1)
+        # Fitting the model to the shop's own measured parts.
+        self.btn_tuning = QPushButton("Shop tuning")
+        self.btn_tuning.setToolTip(
+            "Fit the estimate to parts your shop has run and timed.\n"
+            "The adjustments stay on this computer (or your shop's shared folder).")
+        tune_menu = QMenu(self.btn_tuning)
+        self.act_save_to_library = tune_menu.addAction(
+            "Save this part to the tuning library…", self.save_to_library)
+        self.act_open_library = tune_menu.addAction(
+            "Open the tuning library…", self.open_tuning)
+        self.btn_tuning.setMenu(tune_menu)
+        row.addWidget(self.btn_tuning)
         layout.addLayout(row)
+
+        self.lbl_tuning = QLabel("")
+        self.lbl_tuning.setWordWrap(True)
+        self.lbl_tuning.setStyleSheet("color: #555;")
+        layout.addWidget(self.lbl_tuning)
+        self._refresh_tuning_label()
 
         self.left_layout.addWidget(box)
 
@@ -395,26 +426,21 @@ class MainWindow(QMainWindow):
 
     def _auto_removal_type(self, results: dict) -> None:
         """Round stock with most of its surface turned opens as Lathe."""
-        derived_feats = results.get("derived") or {}
-        frac = float(derived_feats.get("turned_area_fraction") or 0.0)
-        round_stock = results.get("primary") == "cylindrical"
-        threshold = (self._shop_profile.get("turn_auto_fraction", 0.5)
-                     if self._shop_profile else 0.5)
-        lathe = round_stock and frac >= threshold
+        removal, why = cycle_time.auto_removal_type(results, self._shop_profile)
         self.removal_combo.blockSignals(True)
-        self.removal_combo.setCurrentText("Lathe" if lathe else "Mill")
+        self.removal_combo.setCurrentText("Lathe" if removal == "lathe" else "Mill")
         self.removal_combo.blockSignals(False)
-        if lathe:
-            why = f"Auto: Lathe — round stock, {frac:.0%} of the surface is turned."
-        elif round_stock:
-            why = (f"Auto: Mill — round stock, but only {frac:.0%} of the surface is "
-                   f"turned (needs {threshold:.0%}).")
-        else:
-            why = "Auto: Mill — not round stock."
         self.removal_combo.setToolTip(f"{why}\n\n{REMOVAL_TIP}")
 
     def _current_removal_type(self) -> str:
         return self.removal_combo.currentText().strip().lower()
+
+    def _finish_uin(self) -> float:
+        """The finish target in micro-inches, whichever unit it was typed in."""
+        value = self.finish_value.value()
+        if self.finish_unit_combo.currentText().startswith("µm"):
+            return value / 0.0254          # 1 µin = 0.0254 µm
+        return value
 
     def _current_estimate(self):
         if not self.results or self._rate_table is None:
@@ -432,7 +458,7 @@ class MainWindow(QMainWindow):
             return cycle_time.estimate_cycle_time(
                 feats, self.results, self._rate_table,
                 material=self.material_combo.currentText(),
-                finish_uin=self.finish_value.value(),
+                finish_uin=self._finish_uin(),
                 removal_type=self._current_removal_type(),
                 profile=self._shop_profile,
                 operations=self.operations_spin.value(),
@@ -787,7 +813,7 @@ class MainWindow(QMainWindow):
         """Terminates the worker process outright. Because the work is in a
         separate process this interrupts even an OCCT call that would
         otherwise ignore Python entirely."""
-        for runner in (self._runner, self._thin_runner):
+        for runner in (self._runner, self._thin_runner, self._turn_runner):
             if runner is not None:
                 runner.cancel()
         self.statusBar().showMessage("Cancelled.")
@@ -860,6 +886,10 @@ class MainWindow(QMainWindow):
         # can't be pickled); the file path is what later stages re-use.
         self.current_shape = results.get("path")
         self.results = results
+        if self._turn_runner is not None:
+            self._turn_runner.cancel()
+            self._turn_runner = None
+        self._auto_turning = results.get("turning")
 
         self.file_label.setText(Path(results["path"]).name)
         self._auto_removal_type(results)
@@ -900,6 +930,10 @@ class MainWindow(QMainWindow):
             f"(slowest stage: {slowest}) — {n_tri:,} triangles "
             f"at {results['deflection_mm']:.3g} mm deflection"
         )
+        pending, self._pending_entry = self._pending_entry, None
+        if pending is not None and self._current_path and \
+                Path(pending[2]) == Path(self._current_path):
+            self._apply_entry_inputs(pending[0])
 
     def _on_worker_failed(self, title: str, message: str):
         QMessageBox.critical(self, title, message)
@@ -939,7 +973,7 @@ class MainWindow(QMainWindow):
         """Shut down cleanly: let any running worker thread finish and close
         the VTK render window, otherwise PyVista/VTK can emit errors or hang
         on exit."""
-        for runner in (self._runner, self._thin_runner):
+        for runner in (self._runner, self._thin_runner, self._turn_runner):
             if runner is not None:
                 try:
                     runner.cancel()
@@ -950,6 +984,156 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         super().closeEvent(event)
+
+    # ------------------------------------------------------------ tuning
+    def _refresh_tuning_label(self) -> None:
+        state = self._tuning_state
+        text = state.describe() if state is not None else ""
+        if state is not None and state.errors:
+            text = (text + "  " if text else "") + "⚠ " + "; ".join(state.errors[:2])
+        self.lbl_tuning.setText(text)
+        self.lbl_tuning.setVisible(bool(text))
+
+    def reload_shop_profile(self) -> None:
+        """The tuning changed on disk: estimates follow at once."""
+        try:
+            self._shop_profile, self._tuning_state = tuning.load_tuned_profile()
+        except Exception as exc:  # noqa: BLE001
+            self.statusBar().showMessage(f"Shop tuning not loaded: {exc}", 8000)
+            return
+        self._refresh_tuning_label()
+        self._refresh_cycle_time()
+
+    def library_defaults(self) -> dict:
+        """What a part added to the library starts with: today's inputs."""
+        return {"material": self.material_combo.currentText(),
+                "finish_uin": round(self._finish_uin(), 2),
+                "operations": self.operations_spin.value()}
+
+    def open_tuning(self):
+        from partestimator.machining.ui.tuning_window import TuningWindow
+
+        if self._rate_table is None:
+            QMessageBox.warning(self, "Shop tuning",
+                                f"The rate table is not loaded: {self._rate_error}")
+            return None
+        if self._tuning_window is None:
+            w = TuningWindow(self._rate_table, defaults=self.library_defaults, parent=self)
+            w.openRequested.connect(self.open_library_entry)
+            w.tuningChanged.connect(self.reload_shop_profile)
+            self._tuning_window = w
+        self._tuning_window.show()
+        self._tuning_window.raise_()
+        self._tuning_window.activateWindow()
+        return self._tuning_window
+
+    def _entry_fields(self) -> dict:
+        """The inputs on screen, as tuning-library fields."""
+        tapped = self.tapped_spin.value()
+        tol = self.tolerance_value.value()
+        stock_type, stock_size, stock_profile = tuning.stock_fields(self.stock_controls.stock())
+        return {
+            "material": self.material_combo.currentText(),
+            "process": self._current_removal_type(),
+            "finish_uin": round(self._finish_uin(), 2),
+            "tolerance_in": tol if tol > 0 else None,
+            "operations": self.operations_spin.value(),
+            "tapped_holes": None if tapped < 0 else tapped,
+            "stock_type": stock_type,
+            "stock_size": stock_size,
+            "stock_profile": stock_profile,
+        }
+
+    def save_to_library(self) -> None:
+        """Record this part, as set up on screen, with its measured time.
+
+        What the estimate reads from the geometry is captured now; the STEP
+        file is not copied, only its path noted."""
+        from partestimator.machining.ui.tuning_window import SaveToLibraryDialog
+
+        if not self.results or not self._current_path:
+            QMessageBox.information(self, "Shop tuning", "Open a part first.")
+            return
+        path = Path(self._current_path)
+        try:
+            lib = tuning.Library.load()
+            part_id = tuning.file_id(path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Shop tuning", f"Could not read the library:\n{exc}")
+            return
+        existing = lib.find(part_id)
+        fields = self._entry_fields()
+        est = self._current_estimate()
+        dlg = SaveToLibraryDialog(path.stem if existing is None else existing.part, fields,
+                                  existing, est.door_to_door_minutes if est else None,
+                                  lib.folder, self)
+        if not dlg.exec():                     # cancelled
+            return
+        fields.update(dlg.values())
+        try:
+            snap = tuning.capture(self.results, self.stock_controls.stock(),
+                                  self.material_combo.currentText())
+            entry = existing or tuning.Entry(part=path.stem, id=part_id)
+            for k, v in fields.items():
+                setattr(entry, k, v)
+            entry.source_file = str(path.resolve())
+            lib.add(entry, snap)
+            lib.save()
+        except OSError as exc:
+            QMessageBox.warning(self, "Shop tuning",
+                                f"Could not save to the library:\n{exc}\n\n"
+                                f"Is {tuning.LIBRARY_FILE} open in Excel?")
+            return
+        self.statusBar().showMessage(
+            f"{'Updated' if existing else 'Saved'} {entry.part} in the tuning library "
+            f"({lib.csv_path}).", 8000)
+        if self._tuning_window is not None:
+            self._tuning_window.entry_saved()
+
+    def open_library_entry(self, entry, library) -> None:
+        """Show a library part, from the file it was added from, with the
+        inputs saved for it."""
+        path = entry.source_file
+        if not path or not Path(path).is_file():
+            QMessageBox.information(self, "Shop tuning",
+                                    f"The STEP file is no longer there:\n{path}")
+            return
+        self._pending_entry = (entry, library, path)
+        self.fileOpened.emit(path)
+        self._load_and_process(path)            # inputs applied when it is in
+        self.window().raise_()
+        self.window().activateWindow()
+
+    def _apply_entry_inputs(self, entry) -> None:
+        if entry.material:
+            self.material_combo.setCurrentText(entry.material)
+        if entry.process in ("mill", "lathe"):
+            self.removal_combo.blockSignals(True)
+            self.removal_combo.setCurrentText(entry.process.capitalize())
+            self.removal_combo.blockSignals(False)
+        self.finish_unit_combo.setCurrentText(FINISH_UNITS[0])
+        self.finish_value.setValue(entry.finish_uin)
+        if entry.tolerance_in is not None:
+            self.tolerance_value.setValue(entry.tolerance_in)
+        self.operations_spin.setValue(entry.operations)
+        self.tapped_spin.setValue(-1 if entry.tapped_holes is None else entry.tapped_holes)
+        try:
+            stock = tuning.build_stock(entry)
+            if stock.is_extrusion:
+                # Placed on this part the way the stock panel would place it.
+                stock = self.stock_controls.extrusion_for(stock.profile, stock.length_in)
+        except ValueError as exc:
+            self.statusBar().showMessage(f"Saved stock not used: {exc}", 10000)
+            stock = None
+        if stock is not None:
+            self.stock_controls.set_stock(stock)       # refreshes the estimate
+        else:
+            self._refresh_feature_table()
+            self._refresh_display()
+        self.statusBar().showMessage(
+            f"{entry.part}: opened from the tuning library with its saved inputs"
+            + (f"; measured {entry.measured_min:g} min." if entry.measured_min else "."),
+            10000)
 
     # ------------------------------------------------------------- display
     def _draw_overlays(self, fit: bool = True):
@@ -1028,6 +1212,12 @@ class MainWindow(QMainWindow):
         if not self.results:
             return
         self.results["stock"] = stock
+        # A bar set another way round: the cylinder everything reads follows,
+        # and the turned profile is measured again about its axis.
+        cyl = self.stock_controls.cylinder()
+        if cyl is not None and cyl is not self.results.get("cylinder"):
+            self.results["cylinder"] = cyl
+            self._remeasure_turning(cyl)
         # The part may have been turned in its stock: the box everything
         # else reads (labels, removal ratio, the 3D outline) turns with it.
         rect = self.stock_controls.rect_box()
@@ -1041,6 +1231,43 @@ class MainWindow(QMainWindow):
         self._refresh_stock_labels()
         self._refresh_cycle_time()
         self._draw_overlays(fit=False)
+
+    def _remeasure_turning(self, cyl) -> None:
+        """The lathe estimate is built from the profile turned about the
+        bar's axis. The automatic bar's profile came with the analysis; for
+        any other axis it is measured again, in a child process (it needs
+        the shape), and the estimate follows when it arrives."""
+        if self._turn_runner is not None:
+            self._turn_runner.cancel()
+            self._turn_runner = None
+        if cyl is self.stock_controls._auto_cyl:
+            self.results["turning"] = self._auto_turning
+            return
+        if not self._current_path:
+            return
+        runner = AnalysisRunner(self)
+        runner.progress.connect(self.statusBar().showMessage)
+        runner.finished.connect(lambda tg, c=cyl: self._on_turning_measured(c, tg))
+        runner.failed.connect(lambda title, msg: self.statusBar().showMessage(
+            f"Turned profile not re-measured: {title}", 8000))
+        runner.done.connect(lambda r=runner: self._on_turning_done(r))
+        self._turn_runner = runner
+        runner.start_turning(self._current_path, cyl, self.results.get("holes"))
+
+    def _on_turning_measured(self, cyl, turning_geo) -> None:
+        if self.results.get("cylinder") is not cyl:
+            return                          # the bar has moved again since
+        self.results["turning"] = turning_geo
+        self._refresh_feature_table()
+        self._refresh_cycle_time()
+        self.statusBar().showMessage("Turned profile measured about the new bar axis.", 6000)
+
+    def _on_turning_done(self, runner) -> None:
+        if self._turn_runner is runner:
+            self._turn_runner = None
+
+    def turning_busy(self) -> bool:
+        return self._turn_runner is not None
 
     # ------------------------------------------------------- orientation
     def _on_pick_requested(self, mode: str):

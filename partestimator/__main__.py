@@ -8,6 +8,7 @@ an editable install into .venv), so with the venv active:
     part-estimator classify a.step b.step   sheet metal or machined? (--json)
     part-estimator sheet part.step -o out   sheet metal flat pattern (all SMTv13 options)
     part-estimator calibrate times.csv      fit calibration factors to measured times
+    part-estimator tune [--save]            fit the shop tuning library (see `tune --help`)
     part-estimator selftest                 full kernel + GUI check suite
 
 Older forms still work: a bare file path opens the window on it, and
@@ -25,7 +26,7 @@ from pathlib import Path
 from . import __version__
 
 PROG = "part-estimator"
-COMMANDS = ("gui", "classify", "sheet", "calibrate", "selftest")
+COMMANDS = ("gui", "classify", "sheet", "calibrate", "tune", "selftest")
 LEGACY_FLAGS = {"--classify": "classify", "--sheet-cli": "sheet"}
 
 EPILOG = """\
@@ -35,6 +36,8 @@ examples:
   part-estimator classify parts\\*.step --json
   part-estimator sheet bracket.step --material AL5052 -o out
   part-estimator calibrate training_table.csv
+  part-estimator tune --add jobs\\*.step --material "Aluminum 6061-T6"
+  part-estimator tune --save
 
 Run `part-estimator COMMAND --help` for a command's options.
 """
@@ -88,6 +91,35 @@ def build_parser() -> argparse.ArgumentParser:
                        description="Fit the machining cycle-time calibration to the "
                                    "measured times in an exported training CSV.")
     k.add_argument("csv", type=Path, help="exported CSV with cycle_time_min filled in")
+
+    t = sub.add_parser(
+        "tune", help="fit the cycle-time estimate to your shop's measured parts",
+        description="Shop tuning: fit the shop settings to the measured times of the "
+                    "parts in the tuning library and report. Nothing is used until you "
+                    "add --save. The library is the tuning folder beside the launcher "
+                    "(or $PE_TUNING_DIR); it keeps what the estimate needs from each "
+                    "part, not the STEP files. Edit its parts.csv in Excel or in the "
+                    "window's Shop tuning.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    t.add_argument("--add", nargs="+", type=Path, metavar="STEP",
+                   help="analyse STEP files and add them to the library (the files "
+                        "are not copied); then fill in measured_min")
+    t.add_argument("--material", default="", help="material for the parts added")
+    t.add_argument("--finish", type=float, default=63.0, metavar="UIN",
+                   help="target finish for the parts added, µin Ra (default 63)")
+    t.add_argument("--operations", type=int, default=1, metavar="N",
+                   help="operations per part for the parts added (default 1)")
+    t.add_argument("--save", action="store_true",
+                   help="use the fitted values from now on (writes shop_tuning.csv)")
+    t.add_argument("--fit", metavar="KEYS",
+                   help="comma-separated shop-profile settings to fit "
+                        "(default: the ones ticked by default in the window)")
+    t.add_argument("--workers", type=int, default=None, metavar="N",
+                   help="files analysed at once with --add (default: about half the "
+                        "cores, max 3)")
+    t.add_argument("--dir", type=Path, default=None,
+                   help="library folder (default: $PE_TUNING_DIR, else the tuning folder "
+                        "beside the launcher)")
 
     sub.add_parser("selftest", help="run every check (needs the CAD kernel and Qt)",
                    description="Run the machining self-test and the full unit-test suite.")
@@ -160,6 +192,17 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     return report(args.csv)
 
 
+def cmd_tune(args: argparse.Namespace) -> int:
+    from .machining.tuning import run_cli
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    return run_cli(args)
+
+
 def cmd_selftest(args: argparse.Namespace) -> int:  # noqa: ARG001
     from .selftest import main as selftest_main
 
@@ -223,6 +266,7 @@ HANDLERS = {
     "gui": cmd_gui,
     "classify": cmd_classify,
     "calibrate": cmd_calibrate,
+    "tune": cmd_tune,
     "selftest": cmd_selftest,
 }
 

@@ -446,11 +446,10 @@ class TestStockOrientation(QtCase):
         self.assertEqual(self.emitted[-1].basis, "custom")
         self.assertAlmostEqual(self.emitted[-1].thickness_or_diameter_in, 2.0)
 
-    def test_round_bar_hides_it_and_a_new_part_resets_it(self):
+    def test_a_new_part_resets_it(self):
         self.w.btn_orient.click()
         self.w.align([0, 0, 1], self.bottom_axis())
         self.w.set_part(box(4.0, 2.0, 2.0), cyl(2.0, 4.0), "cylindrical")
-        self.assertFalse(self.w.orient_row.isVisibleTo(self.w))
         self.assertFalse(self.w.orient_dialog.isVisible())
         self.assertFalse(self.w.is_reoriented())
         # No vertices given: only the automatic box is on offer.
@@ -463,6 +462,78 @@ class TestStockOrientation(QtCase):
         after = self.emitted[-1]
         self.assertTrue(after.is_extrusion)
         self.assertLessEqual(after.volume_in3, before.volume_in3 + 1e-9)
+
+
+@unittest.skipUnless(HAVE_QT, "needs PySide6")
+class TestRoundBarOrientation(QtCase):
+    """A 6 x 2 x 2 bar-shaped part: the automatic bar runs along its length.
+    Setting its 6 x 2 side face square to the bar turns the bar across it."""
+
+    def setUp(self):
+        import numpy as np
+
+        from partestimator.machining.geometry import bounding_box as bb
+        from partestimator.machining.ui import stock_panel as sp
+
+        self.np, self.sp = np, sp
+        self.pts = np.array([[x, y, z] for x in (0, 6) for y in (0, 2) for z in (0, 2)],
+                            dtype=float) * MM
+        self.auto = bb.cylinder_about(self.pts, [1, 0, 0])
+        self.w = sp.StockControls()
+        self.emitted, self.turned = [], []
+        self.w.stockChanged.connect(self.emitted.append)
+        self.w.orientationChanged.connect(lambda: self.turned.append(True))
+        self.w.set_part(box(6.0, 2.0, 2.0), self.auto, "cylindrical", points_mm=self.pts)
+        self.addCleanup(self.w.orient_dialog.close)
+
+    def test_the_round_bar_dialog_picks_one_face(self):
+        self.assertEqual(self.w.type_combo.currentText(), self.sp.ROUND)
+        self.assertTrue(self.w.orient_row.isVisibleTo(self.w))
+        self.w.btn_orient.click()
+        d = self.w.orient_dialog
+        self.assertEqual(d.faces.title(), "Set a face square to the bar")
+        self.assertFalse(d.turn.isVisibleTo(d))
+        self.assertIn("bar's ends", d.lbl_step.text())
+        self.assertEqual(self.w.picking(), "part")
+
+    def test_a_face_square_to_the_bar_turns_the_bar(self):
+        before = self.emitted[-1] if self.emitted else self.w.stock()
+        self.w.btn_orient.click()
+        self.w.set_part_face([0, 0, 1])
+        c = self.w.cylinder()
+        self.assertAlmostEqual(abs(float(self.np.dot(c.axis_direction, [0, 0, 1]))), 1.0)
+        self.assertAlmostEqual(c.height_mm / MM, 2.0, places=6)
+        self.assertAlmostEqual(2 * c.radius_mm / MM, (36 + 4) ** 0.5, places=4)
+        s = self.emitted[-1]
+        self.assertTrue(s.is_round)
+        self.assertGreater(s.thickness_or_diameter_in, before.thickness_or_diameter_in)
+        self.assertEqual(s.length_in, 3.0)            # 2 + 1 grip, on a 1/4
+        self.assertTrue(self.w.is_reoriented())
+        self.assertTrue(self.w.lbl_oriented.isVisibleTo(self.w))
+        self.assertTrue(self.turned)
+        self.assertEqual(self.w.picking(), "part")    # pick again to change it
+
+    def test_automatic_puts_the_bar_back(self):
+        start = self.w.stock()
+        self.w.btn_orient.click()
+        self.w.set_part_face([0, 0, 1])
+        self.w.orient_dialog.btn_automatic.click()
+        self.assertIs(self.w.cylinder(), self.auto)
+        self.assertFalse(self.w.is_reoriented())
+        self.assertEqual(self.emitted[-1].table_rows(), start.table_rows())
+
+    def test_plate_keeps_its_own_orientation(self):
+        self.w.btn_orient.click()
+        self.w.set_part_face([0, 0, 1])
+        self.w.type_combo.setCurrentText(self.sp.PLATE)
+        d = self.w.orient_dialog
+        self.assertEqual(d.faces.title(), "Make two faces parallel")
+        self.assertTrue(d.turn.isVisibleTo(d))
+        self.assertFalse(self.w.is_reoriented())      # the plate was not turned
+        self.w.set_part_face([0, 0, 1])               # plate: waits for a stock face
+        self.assertEqual(self.w.picking(), "stock")
+        self.w.type_combo.setCurrentText(self.sp.ROUND)
+        self.assertTrue(self.w.is_reoriented())       # the bar still is
 
 
 @unittest.skipUnless(HAVE_QT, "needs PySide6")

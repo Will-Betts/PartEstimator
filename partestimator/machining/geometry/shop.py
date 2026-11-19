@@ -104,7 +104,11 @@ class ShopProfile:
             self.notes = {}
 
 
-def load_profile(path: str | Path | None = None) -> ShopProfile:
+def load_profile(path: str | Path | None = None,
+                 overrides: dict | None = None) -> ShopProfile:
+    """The shop profile, with `overrides` ({key: value}, the shop's own
+    tuning -- see machining/tuning.py) laid over the file and checked by the
+    same rules."""
     path = Path(path) if path is not None else PROFILE_PATH
     if not path.exists():
         raise FileNotFoundError(f"Shop profile not found at {path}")
@@ -123,6 +127,8 @@ def load_profile(path: str | Path | None = None) -> ShopProfile:
                     f"{path.name} line {line}: {key} value is not a number "
                     f"({raw.get('value')!r})") from None
             notes[key] = (raw.get("notes") or "").strip()
+    for key, value in (overrides or {}).items():
+        values[key] = float(value)
     for required in ("spindle_hp", "rough_open_duty", "rough_pocket_duty"):
         if required not in values:
             raise ValueError(f"{path.name} is missing required key {required!r}")
