@@ -651,6 +651,16 @@ INSIDE_TOL_IN = 0.01
 MAX_POINTS = 1500
 COARSE_POINTS = 128
 
+#: An extrusion is only picked for a part on its own when the part reaches
+#: across the profile's whole outline: within this much of the envelope in
+#: both directions (whichever allowance is larger). A flat part fits inside
+#: one leg of an angle, but nobody buys an angle to make a flat part.
+FILL_SHORT_IN = 0.125
+FILL_SHORT_FRACTION = 0.10
+#: Solid bars have no legs to leave empty: the least-material one that
+#: holds the part is already the right buy, so they skip the fill check.
+SOLID_SHAPES = ("hex_bar",)
+
 
 @dataclass
 class _Candidate:
@@ -810,6 +820,19 @@ def _sample(points_mm, limit: int = 2 * MAX_POINTS) -> np.ndarray | None:
     return pts
 
 
+def fills_outline(profile: ExtrusionProfile, section_in) -> bool:
+    """Whether a part whose section box is `section_in` (along the profile's
+    x, y) reaches across the profile's whole envelope."""
+    if profile.shape in SOLID_SHAPES:
+        return True
+    if section_in is None:
+        return False
+    for span, env in zip(section_in, profile.envelope_in):
+        if float(span) < env - max(FILL_SHORT_IN, FILL_SHORT_FRACTION * env) - 1e-9:
+            return False
+    return True
+
+
 def _shortest_fitting_length(profile: ExtrusionProfile, rect_box, cylinder,
                              loose: bool) -> float | None:
     """The shortest way the profile's envelope could run along the part, by
@@ -828,9 +851,13 @@ def _shortest_fitting_length(profile: ExtrusionProfile, rect_box, cylinder,
 
 
 def best_profile(profiles, rect_box, cylinder=None, part_volume_in3: float | None = None,
-                 points_mm=None) -> ExtrusionProfile | None:
+                 points_mm=None, require_fill: bool = True) -> ExtrusionProfile | None:
     """The profile that holds the part with the least material (at the
     recommended length), or None.
+
+    With `require_fill` (the default) only a profile the part reaches across
+    is considered -- see fills_outline -- so a flat part is never put in an
+    angle just because it fits in one leg.
 
     Hundreds of standard profiles make the full fit test too slow to run on
     every one, so each is first bounded below by its area times the shortest
@@ -843,16 +870,16 @@ def best_profile(profiles, rect_box, cylinder=None, part_volume_in3: float | Non
         shortest = _shortest_fitting_length(prof, rect_box, cylinder, loose=pts is not None)
         if shortest is not None:
             floor = prof.area_in2 * stock_mod.ceil_to_increment(
-                shortest + stock_mod.GRIP_ALLOWANCE_IN)
+                shortest + stock_mod.length_allowance_in())
             bounded.append((floor, prof))
     bounded.sort(key=lambda fp: fp[0])
     best, best_vol = None, None
     for floor, prof in bounded:
         if best_vol is not None and floor >= best_vol - 1e-12:
             break
-        s = extrusion_stock(prof, rect_box, cylinder, part_volume_in3=part_volume_in3,
-                            points_mm=pts)
+        s, cand = _fit(prof, rect_box, cylinder, None, part_volume_in3, pts)
         if (s is not None and s.fits and s.enough_material
+                and (not require_fill or fills_outline(prof, cand.section_in))
                 and (best_vol is None or s.volume_in3 < best_vol)):
             best, best_vol = prof, s.volume_in3
     return best
@@ -870,10 +897,15 @@ def extrusion_stock(profile: ExtrusionProfile, rect_box, cylinder=None,
     used to turn the profile the right way round), else from
     `part_volume_in3` against the section's capacity.
     """
-    pts = _sample(points_mm)
+    return _fit(profile, rect_box, cylinder, length_in, part_volume_in3, _sample(points_mm))[0]
+
+
+def _fit(profile, rect_box, cylinder, length_in, part_volume_in3, pts):
+    """(stock, the placement chosen) for extrusion_stock; (None, None) when
+    the profile cannot run along the part at all."""
     cands = _candidates(profile, rect_box, cylinder, pts)
     if not cands:
-        return None
+        return None, None
 
     def holds_part(c: _Candidate) -> bool:
         if c.inside is not None:
@@ -891,7 +923,7 @@ def extrusion_stock(profile: ExtrusionProfile, rect_box, cylinder=None,
         # Nothing fits: run it along the part's longest direction and say so.
         best = max(cands, key=lambda c: c.length_in)
     min_len = best.length_in
-    recommended = stock_mod.ceil_to_increment(min_len + stock_mod.GRIP_ALLOWANCE_IN)
+    recommended = stock_mod.ceil_to_increment(min_len + stock_mod.length_allowance_in())
     length = recommended if length_in is None else float(length_in)
     ex, ey = profile.envelope_in
     return stock_mod.StockSize(
@@ -908,4 +940,4 @@ def extrusion_stock(profile: ExtrusionProfile, rect_box, cylinder=None,
         fits=best.fits,
         enough_material=bool(usable) or (best.fits and holds_part(best)),
         section_inside=best.inside,
-    )
+    ), best

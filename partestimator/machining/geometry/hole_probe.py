@@ -163,7 +163,7 @@ def probe_holes(shape: TopoDS_Shape, holes, diagonal_mm: float,
     if not holes:
         return [], stats
 
-    started = time.monotonic()
+    started = time.perf_counter()
     deadline = started + time_budget_s if time_budget_s and time_budget_s > 0 else None
 
     intersector = IntCurvesFace_ShapeIntersector()
@@ -179,7 +179,7 @@ def probe_holes(shape: TopoDS_Shape, holes, diagonal_mm: float,
                 stats.cancelled = True
                 stop_at = index
                 break
-            if deadline is not None and time.monotonic() > deadline:
+            if deadline is not None and time.perf_counter() > deadline:
                 stats.timed_out = True
                 stop_at = index
                 break
@@ -229,7 +229,7 @@ def probe_holes(shape: TopoDS_Shape, holes, diagonal_mm: float,
 
     if progress is not None:
         progress(total, total)
-    stats.elapsed_s = time.monotonic() - started
+    stats.elapsed_s = time.perf_counter() - started
     return kept, stats
 
 

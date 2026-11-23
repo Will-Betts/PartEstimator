@@ -84,7 +84,7 @@ class TestEveryEdgeSamplerIsGuarded(unittest.TestCase):
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef) and \
                         node.name.lstrip("_") == "edge_has_curve":
-                    definitions.append(str(path.relative_to(ROOT)))
+                    definitions.append(path.relative_to(ROOT).as_posix())
         self.assertEqual(
             definitions, ["partestimator/smt/occ/topo.py"],
             f"the curve check must be defined once, in topo.py; found in "

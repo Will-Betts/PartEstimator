@@ -65,6 +65,16 @@ class TestFitExtrusion(unittest.TestCase):
     def test_round_work_is_left_alone(self):
         self.assertIsNone(self.fit(L_SECTION, primary="cylindrical"))
 
+    def test_a_flat_strip_is_not_put_in_an_angle(self):
+        # It fits in one leg of a 2 x 2 angle with less metal than plate,
+        # but nobody buys an angle to make a flat part.
+        strip = [(0, 0), (2, 0), (2, 0.25), (0, 0.25)]
+        b = box(6.0, 2.0, 0.25)
+        pts, tris = prism(strip, 6.0)
+        plate = st.rectilinear_stock(b.extents_mm)
+        self.assertIsNone(pipeline.fit_extrusion("rectilinear", b, None, plate,
+                                                 pts, tris, 0.5 * 6.0))
+
     def test_a_profile_that_needs_more_than_plate_is_not_used(self):
         b = box(6.0, 2.0, 2.0)
         pts, tris = prism(L_SECTION, 6.0)

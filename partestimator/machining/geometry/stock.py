@@ -34,6 +34,12 @@ down, so it gets the 0.125 in cleanup allowance before rounding.
 The 1.00 in on W and L is work-holding: enough to get into a vise or
 soft jaws and still have the part clear of the cut.
 
+Those four allowances (length, width, plate thickness, bar diameter) are
+the shipped defaults; a shop sets its own in Settings..., saved in
+settings.json. `set_allowances()` applies them to this process, and the
+analysis passes them to its worker process as the `stock_allowances`
+option. The sheet break and the 1/4 in rounding are not settings.
+
 Those rules give the RECOMMENDED stock. The NC programmer may choose
 otherwise -- a bar instead of plate, a size already on the shelf, or the
 bare part envelope -- and that changes both the roughing time and the
@@ -64,6 +70,45 @@ CLEANUP_ALLOWANCE_IN = 0.125
 GRIP_ALLOWANCE_IN = 1.00
 ROUND_INCREMENT_IN = 0.25
 
+#: The allowances in use, by name: the shipped values until a shop's own are
+#: applied with set_allowances. Extrusions are cut to the length allowance.
+DEFAULT_ALLOWANCES = {
+    "length_in": GRIP_ALLOWANCE_IN,
+    "width_in": GRIP_ALLOWANCE_IN,
+    "thickness_in": CLEANUP_ALLOWANCE_IN,
+    "diameter_in": CLEANUP_ALLOWANCE_IN,
+}
+#: No allowance may be negative or more than this (inches).
+MAX_ALLOWANCE_IN = 12.0
+_allowances = dict(DEFAULT_ALLOWANCES)
+
+
+def allowances() -> dict:
+    """The stock allowances in use, inches: length_in, width_in,
+    thickness_in, diameter_in."""
+    return dict(_allowances)
+
+
+def set_allowances(**values) -> dict:
+    """Use these allowances from now on in this process; names not given go
+    back to the shipped value. Returns what is now in use."""
+    unknown = set(values) - set(DEFAULT_ALLOWANCES)
+    if unknown:
+        raise ValueError(f"not a stock allowance: {', '.join(sorted(unknown))}")
+    new = dict(DEFAULT_ALLOWANCES)
+    for key, v in values.items():
+        v = float(v)
+        if not 0.0 <= v <= MAX_ALLOWANCE_IN:
+            raise ValueError(f"stock allowance {key} must be 0 to {MAX_ALLOWANCE_IN:g} in")
+        new[key] = v
+    _allowances.clear()
+    _allowances.update(new)
+    return allowances()
+
+
+def length_allowance_in() -> float:
+    return _allowances["length_in"]
+
 
 def ceil_to_increment(value_in: float, increment_in: float = ROUND_INCREMENT_IN) -> float:
     """Rounds up to the next multiple of `increment_in`. A value already on
@@ -79,7 +124,7 @@ def thickness_stock_in(part_thickness_in: float) -> float:
     """Stock thickness for a prismatic part, applying the sheet break."""
     if part_thickness_in <= SHEET_THICKNESS_MAX_IN:
         return round(float(part_thickness_in), 6)
-    return ceil_to_increment(part_thickness_in + CLEANUP_ALLOWANCE_IN)
+    return ceil_to_increment(part_thickness_in + _allowances["thickness_in"])
 
 
 RECOMMENDED = "recommended"
@@ -174,8 +219,8 @@ def rectilinear_stock(extents_mm) -> StockSize:
     part_thickness = dims_in[2]
 
     thickness = thickness_stock_in(part_thickness)
-    width = ceil_to_increment(dims_in[1] + GRIP_ALLOWANCE_IN)
-    length = ceil_to_increment(dims_in[0] + GRIP_ALLOWANCE_IN)
+    width = ceil_to_increment(dims_in[1] + _allowances["width_in"])
+    length = ceil_to_increment(dims_in[0] + _allowances["length_in"])
 
     return StockSize(
         kind="rectilinear",
@@ -190,8 +235,8 @@ def rectilinear_stock(extents_mm) -> StockSize:
 def cylindrical_stock(diameter_mm: float, length_mm: float) -> StockSize:
     """Barstock. The sheet break does not apply to round stock -- bar is
     bought in fractional diameters, so a small bar still rounds up."""
-    diameter = ceil_to_increment(diameter_mm / MM_PER_INCH + CLEANUP_ALLOWANCE_IN)
-    length = ceil_to_increment(length_mm / MM_PER_INCH + GRIP_ALLOWANCE_IN)
+    diameter = ceil_to_increment(diameter_mm / MM_PER_INCH + _allowances["diameter_in"])
+    length = ceil_to_increment(length_mm / MM_PER_INCH + _allowances["length_in"])
     return StockSize(
         kind="cylindrical",
         thickness_or_diameter_in=diameter,

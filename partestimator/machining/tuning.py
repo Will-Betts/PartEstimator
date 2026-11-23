@@ -636,11 +636,13 @@ def default_workers() -> int:
     return max(1, min(3, (os.cpu_count() or 2) // 2))
 
 
-def _capture_worker(step_path: str, material: str) -> dict:
-    """Runs in a child process: analyse one file and capture it."""
+def _capture_worker(step_path: str, material: str, allowances: dict | None = None) -> dict:
+    """Runs in a child process: analyse one file and capture it, with the
+    parent's stock allowances (a new process starts on the shipped ones)."""
     from .geometry import pipeline
 
-    results = pipeline.compute_analysis(step_path, options=dict(ANALYSIS_OPTIONS))
+    results = pipeline.compute_analysis(
+        step_path, options={**ANALYSIS_OPTIONS, "stock_allowances": allowances})
     stock = auto_stock(results)
     return {"snapshot": capture(results, stock, material), "stock": stock_fields(stock)}
 
@@ -681,7 +683,8 @@ def capture_files(paths, material: str = "", workers: int | None = None,
             return orphans
         pool = cf.ProcessPoolExecutor(max_workers=max(1, min(n, len(batch))),
                                       mp_context=mp.get_context("spawn"))
-        futs = {pool.submit(_capture_worker, str(p), material): p for p in batch}
+        allowances = st.allowances()
+        futs = {pool.submit(_capture_worker, str(p), material, allowances): p for p in batch}
         pending = set(futs)
         try:
             while pending:

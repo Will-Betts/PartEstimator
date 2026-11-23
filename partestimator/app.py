@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
 
 from . import __appname__, __version__
 from .classify import MACHINED, SHEET, Classification, classify_to_dict, from_dict
-from .settings import SETTINGS_PATH, Settings
+from .settings import MAX_PAD_IN, SETTINGS_PATH, Settings
 
 PAGE_SHEET, PAGE_MACHINED = 0, 1
 TAB_INDEX = {0: "sheet_metal", 1: "machined"}
@@ -71,10 +71,40 @@ class SettingsDialog(QDialog):
         note = QLabel(
             "A FLAT part of uniform thickness at or under this is treated as\n"
             "sheet metal; thicker is machined plate. Bent parts are always\n"
-            f"sheet metal. Saved to {SETTINGS_PATH.name} beside the launcher."
+            "sheet metal."
         )
         note.setStyleSheet("color:#777;")
         form.addRow(note)
+
+        form.addRow(QLabel("<b>Machining stock allowances</b>"))
+        self.pads = {}
+        rows = (
+            ("stock_length_pad_in", "Length:", "Added to the part's length (plate, bar and "
+                                               "extrusion) for work-holding."),
+            ("stock_width_pad_in", "Width:", "Added to the part's width (plate) for "
+                                             "work-holding."),
+            ("stock_thickness_pad_in", "Thickness:", "Added to the part's thickness (plate "
+                                                     "over the sheet break) for cleanup."),
+            ("stock_diameter_pad_in", "Bar diameter:", "Added to the part's diameter (round "
+                                                       "bar) for cleanup."),
+        )
+        for key, label, tip in rows:
+            spin = QDoubleSpinBox()
+            spin.setDecimals(3)
+            spin.setRange(0.0, MAX_PAD_IN)
+            spin.setSingleStep(0.125)
+            spin.setSuffix(" in")
+            spin.setValue(getattr(settings, key))
+            spin.setToolTip(tip)
+            form.addRow(label, spin)
+            self.pads[key] = spin
+        pad_note = QLabel(
+            "The recommended stock is the part plus these, rounded up to the\n"
+            "next 1/4 in. Sheet (0.190 in thick or under) is used as-is.\n"
+            f"All saved to {SETTINGS_PATH.name} beside the launcher."
+        )
+        pad_note.setStyleSheet("color:#777;")
+        form.addRow(pad_note)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -89,6 +119,7 @@ class UnifiedWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self.settings = Settings.load()
+        self.settings.apply()       # the stock allowances, before any part opens
         self.path: Path | None = None
         self.detected: Classification | None = None
         self.mode: str | None = None
@@ -365,12 +396,20 @@ class UnifiedWindow(QMainWindow):
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec() != QDialog.Accepted:
             return
+        old_cutoff = self.settings.sheet_cutoff_in
+        old_pads = self.settings.stock_allowances()
         self.settings.sheet_cutoff_in = float(dlg.cutoff.value())
+        for key, spin in dlg.pads.items():
+            setattr(self.settings, key, float(spin.value()))
         try:
             self.settings.save()
         except OSError as exc:
             QMessageBox.warning(self, "Settings", f"Could not save settings: {exc}")
-        if self.path is not None and self._future is None:
+        if self.settings.stock_allowances() != old_pads:
+            self.settings.apply()
+            self.mach.refresh_stock_allowances()
+        if (self.path is not None and self._future is None
+                and self.settings.sheet_cutoff_in != old_cutoff):
             if QMessageBox.question(
                     self, "Settings", "Re-check the open part with the new cutoff?"
             ) == QMessageBox.Yes:
