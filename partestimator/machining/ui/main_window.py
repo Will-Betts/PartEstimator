@@ -207,7 +207,14 @@ class MainWindow(QMainWindow):
     ANALYSIS_OPTIONS = dict(tuning.ANALYSIS_OPTIONS)
 
     def _analysis_options(self) -> dict:
-        return dict(self.ANALYSIS_OPTIONS)
+        # The worker process starts on the shipped stock allowances: hand it
+        # the ones in use here (Settings...).
+        return {**self.ANALYSIS_OPTIONS, "stock_allowances": stock_mod.allowances()}
+
+    def refresh_stock_allowances(self) -> None:
+        """The stock allowances changed (Settings...): resize the open part's
+        stock if it was sized by the rules."""
+        self.stock_controls.refresh_allowances()
 
     def _build_display_row(self) -> QHBoxLayout:
         """Only the overlays worth toggling. Model edges are always on and

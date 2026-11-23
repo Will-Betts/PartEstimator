@@ -115,7 +115,9 @@ class TestTuningLibrary(unittest.TestCase):
         self.assertIn("T x W x L", w.lbl_busy.text())
         self.assertNotEqual(w.parts.item(1, tw.C_EST).text(), before)
         self.assertEqual(w.parts.item(2, tw.C_STATUS).text(), "ready")
-        self.assertEqual(w.parts.item(2, tw.C_ERR).text(), "-33%")
+        # Measured = 1.5 x the shown (rounded) estimate: -33%, give or take
+        # the rounding.
+        self.assertIn(w.parts.item(2, tw.C_ERR).text(), ("-33%", "-34%", "-32%"))
 
     def test_3_fit_and_save(self):
         w = self.window()

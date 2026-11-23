@@ -296,6 +296,89 @@ def minimum_oriented_box(points: np.ndarray, hull_data: HullData | None = None) 
     )
 
 
+#: Flat faces closer than this to one direction count as the same axis.
+FACE_AXIS_TOL_DEG = 0.5
+#: The part is squared to its faces only when flat faces make up at least
+#: this share of its surface; a mostly curved part keeps the tightest box.
+MIN_PLANAR_SHARE = 0.15
+#: A side axis steers the in-plane turn only with at least this share of
+#: the flat area; smaller ones (a key slot's walls) are left to the outline.
+MIN_SIDE_SHARE = 0.01
+
+
+def face_axes(planes) -> list[tuple[np.ndarray, float]]:
+    """The directions the part's flat faces look along, as (unit axis, total
+    area mm^2), biggest area first. A face and its opposite (top and bottom)
+    share one axis. `planes` holds (normal, area) pairs, or objects with
+    `normal` and `area_mm2`."""
+    cos_tol = np.cos(np.radians(FACE_AXIS_TOL_DEG))
+    items = []
+    for pl in planes or ():
+        n, a = ((pl.normal, pl.area_mm2) if hasattr(pl, "normal") else pl)
+        n = np.asarray(n, dtype=float)
+        norm = float(np.linalg.norm(n))
+        if norm > 0 and a and a > 0:
+            items.append((n / norm, float(a)))
+    items.sort(key=lambda na: -na[1])
+    groups: list[list] = []          # [summed area-weighted axis, total area]
+    for n, a in items:
+        for g in groups:
+            axis = g[0] / np.linalg.norm(g[0])
+            d = float(n @ axis)
+            if abs(d) >= cos_tol:
+                g[0] = g[0] + (a if d > 0 else -a) * n
+                g[1] += a
+                break
+        else:
+            groups.append([a * n, a])
+    out = [(g[0] / np.linalg.norm(g[0]), g[1]) for g in groups]
+    out.sort(key=lambda na: -na[1])
+    return out
+
+
+def face_aligned_box(points: np.ndarray, planes, surface_area_mm2: float | None = None,
+                     hull_data: HullData | None = None) -> OrientedBox | None:
+    """The box a machinist would square the part up in: one pair of stock
+    faces parallel to the axis carrying the most flat-face area (a plate's
+    top and bottom), and turned about it to line up with the biggest side
+    faces square to that. With no such side faces, turned for the smallest
+    rectangle round the outline.
+
+    None when the part has too little flat area to go by (see
+    MIN_PLANAR_SHARE) -- the tightest box is then as good a guess as any.
+    """
+    axes = face_axes(planes)
+    if not axes:
+        return None
+    flat = sum(a for _n, a in axes)
+    if surface_area_mm2 and flat < MIN_PLANAR_SHARE * surface_area_mm2:
+        return None
+    first = axes[0][0]
+    sin_tol = np.sin(np.radians(FACE_AXIS_TOL_DEG))
+    side = next((n for n, a in axes[1:]
+                 if abs(float(n @ first)) <= sin_tol and a >= MIN_SIDE_SHARE * flat), None)
+    hull_data = hull_data if hull_data is not None else prepare_hull(points)
+    if side is not None:
+        second = side - float(side @ first) * first
+        second /= np.linalg.norm(second)
+    else:
+        u, v = _orthonormal_basis(first)
+        pts = hull_data.points
+        hull2 = convex_hull_2d(np.column_stack([pts @ u, pts @ v]))
+        second = u
+        if len(hull2) >= 3:
+            _area, _c, _wh, angle = min_area_rectangle_2d(hull2, already_hulled=True)
+            second = np.cos(angle) * u + np.sin(angle) * v
+    frame = np.array([first, second, np.cross(first, second)])
+    proj = hull_data.all_points @ frame.T
+    lo, hi = proj.min(axis=0), proj.max(axis=0)
+    extents = hi - lo
+    centre = ((lo + hi) / 2.0) @ frame
+    return OrientedBox(kind="rectilinear", center_mm=centre, axes=frame, extents_mm=extents,
+                       volume_mm3=float(np.prod(extents)),
+                       corners_mm=_box_corners(centre, frame, extents))
+
+
 def axis_aligned_box(points: np.ndarray) -> OrientedBox:
     """Axis-aligned bounding box in the STEP file's own coordinate system.
 

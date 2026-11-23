@@ -126,5 +126,64 @@ class TestPickingTheBox(unittest.TestCase):
         self.assertEqual(len({tuple(p) for p in c}), 4)
 
 
+def l_prism(length=4.0, a=3.0, b=2.0, t=0.06):
+    """Points and flat faces (normal, area) of an L section a x b, t thick,
+    run `length` along Z."""
+    sec = [(0, 0), (a, 0), (a, t), (t, t), (t, b), (0, b)]
+    pts = np.array([(x, y, z) for z in (0.0, length) for x, y in sec], dtype=float)
+    planes = []
+    for (x1, y1), (x2, y2) in zip(sec, sec[1:] + sec[:1]):
+        edge = np.array([x2 - x1, y2 - y1, 0.0])
+        n = np.cross(edge, [0, 0, 1.0])
+        planes.append((n / np.linalg.norm(n), float(np.linalg.norm(edge)) * length))
+    end = (a + b - t) * t
+    planes += [(np.array([0, 0, -1.0]), end), (np.array([0, 0, 1.0]), end)]
+    surface = sum(area for _n, area in planes)
+    return pts, planes, surface
+
+
+def turned(points, planes, r):
+    return points @ r.T, [(r @ n, area) for n, area in planes]
+
+
+@unittest.skipUnless(HAVE_SCIPY, "needs scipy")
+class TestFaceAlignedBox(unittest.TestCase):
+    def setUp(self):
+        from partestimator.machining.geometry import bounding_box as bb
+
+        self.bb = bb
+        self.r = o.rotation_matrix(0, 25.0) @ o.rotation_matrix(1, -40.0) @ o.rotation_matrix(2, 17.0)
+
+    def test_opposite_faces_share_an_axis_biggest_first(self):
+        axes = self.bb.face_axes([((0, 0, 1), 2.0), ((0, 0, -1), 3.0), ((1, 0, 0), 4.0),
+                                  ((0, 1e-4, 1), 1.0)])
+        self.assertEqual(len(axes), 2)
+        self.assertAlmostEqual(axes[0][1], 6.0)
+        self.assertAlmostEqual(abs(axes[0][0][2]), 1.0, places=4)
+        self.assertAlmostEqual(axes[1][1], 4.0)
+
+    def test_an_l_section_is_squared_to_its_legs(self):
+        pts, planes, surface = l_prism()
+        pts, planes = turned(pts, planes, self.r)
+        box = self.bb.face_aligned_box(pts, planes, surface)
+        np.testing.assert_allclose(sorted(box.extents_mm), [2.0, 3.0, 4.0], atol=1e-6)
+        legs = self.r @ np.eye(3)
+        for axis in box.axes:
+            self.assertAlmostEqual(np.max(np.abs(legs.T @ axis)), 1.0, places=6)
+        proj = pts @ box.axes.T
+        centre = box.center_mm @ box.axes.T
+        self.assertTrue(np.all(np.abs(proj - centre) <= box.extents_mm / 2 + 1e-9))
+
+    def test_with_no_side_faces_the_outline_sets_the_turn(self):
+        pts = block(6.0, 4.0, 0.5, turn_deg=20.0)
+        box = self.bb.face_aligned_box(pts, [((0, 0, 1), 24.0), ((0, 0, -1), 24.0)])
+        np.testing.assert_allclose(sorted(box.extents_mm), [0.5, 4.0, 6.0], atol=1e-6)
+
+    def test_a_mostly_curved_part_keeps_the_tightest_box(self):
+        pts, planes, _surface = l_prism()
+        self.assertIsNone(self.bb.face_aligned_box(pts, planes, surface_area_mm2=1e6))
+        self.assertIsNone(self.bb.face_aligned_box(pts, []))
+
+
 if __name__ == "__main__":
     unittest.main()

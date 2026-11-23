@@ -194,7 +194,9 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
 
 def cmd_tune(args: argparse.Namespace) -> int:
     from .machining.tuning import run_cli
+    from .settings import Settings
 
+    Settings.load().apply()     # parts added from here get the shop's stock allowances
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="replace")

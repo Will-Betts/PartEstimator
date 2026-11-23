@@ -35,6 +35,7 @@ from . import (
 
 DEFAULT_OPTIONS = {
     "oriented_box": True,
+    "face_aligned_box": True, # square the stock to the part's main flat faces
     "cylinder": True,
     "undercut": False,
     "edges": True,
@@ -85,6 +86,10 @@ def compute_analysis(path: str, options: dict | None = None, progress=None,
     why the process-based runner also supports hard termination.
     """
     opt = {**DEFAULT_OPTIONS, **(options or {})}
+    if opt.get("stock_allowances") is not None:
+        # The shop's own stock allowances (Settings...): a worker process
+        # starts on the shipped ones.
+        stock_mod.set_allowances(**opt["stock_allowances"])
     timings: dict[str, float] = {}
 
     def emit(msg):
@@ -127,26 +132,6 @@ def compute_analysis(path: str, options: dict | None = None, progress=None,
     with stage("Convex hull", "Building convex hull…"):
         hull_data = bounding_box.prepare_hull(vertices)
 
-    with stage("Bounding boxes", "Fitting bounding boxes…"):
-        if opt["oriented_box"]:
-            rect_box = bounding_box.minimum_oriented_box(vertices, hull_data)
-        else:
-            rect_box = bounding_box.axis_aligned_box(vertices)
-        cyl = (bounding_box.minimum_enclosing_cylinder(vertices, hull_data)
-               if opt["cylinder"] else None)
-        primary = "rectilinear" if cyl is None else bounding_box.select_primary(rect_box, cyl)
-        stock = stock_mod.compute_stock(primary, rect_box, cyl)
-
-    with stage("Extrusion fit", "Fitting extrusion profiles…"):
-        extrusion = None
-        if opt["extrusion_fit"]:
-            try:
-                extrusion = fit_extrusion(
-                    primary, rect_box, cyl, stock, render_points, render_triangles,
-                    shape_props.volume_mm3 / stock_mod.MM_PER_INCH ** 3)
-            except Exception as exc:  # noqa: BLE001 -- plate stock is a fine fallback
-                emit(f"Extrusion fit skipped: {type(exc).__name__}")
-
     with stage("Face scan", "Analyzing faces…"):
         def _face_progress(done, total):
             emit(f"Analyzing faces… {done:,} / {total:,}")
@@ -177,6 +162,32 @@ def compute_analysis(path: str, options: dict | None = None, progress=None,
         hole_groups = holes_mod.group_holes_by_diameter(validated_holes)
         deep_holes = features.flag_deep_holes(validated_holes)
         smallest_radii = features.smallest_fillet_radii_mm(scan.fillets)
+
+    with stage("Bounding boxes", "Fitting bounding boxes…"):
+        rect_box = None
+        if opt["oriented_box"] and opt["face_aligned_box"]:
+            # Squared to the part's own faces, as it would be set up in the
+            # vise; the tightest box only for a part with too little flat.
+            rect_box = bounding_box.face_aligned_box(
+                vertices, scan.planes, shape_props.surface_area_mm2, hull_data)
+        if rect_box is None and opt["oriented_box"]:
+            rect_box = bounding_box.minimum_oriented_box(vertices, hull_data)
+        elif rect_box is None:
+            rect_box = bounding_box.axis_aligned_box(vertices)
+        cyl = (bounding_box.minimum_enclosing_cylinder(vertices, hull_data)
+               if opt["cylinder"] else None)
+        primary = "rectilinear" if cyl is None else bounding_box.select_primary(rect_box, cyl)
+        stock = stock_mod.compute_stock(primary, rect_box, cyl)
+
+    with stage("Extrusion fit", "Fitting extrusion profiles…"):
+        extrusion = None
+        if opt["extrusion_fit"]:
+            try:
+                extrusion = fit_extrusion(
+                    primary, rect_box, cyl, stock, render_points, render_triangles,
+                    shape_props.volume_mm3 / stock_mod.MM_PER_INCH ** 3)
+            except Exception as exc:  # noqa: BLE001 -- plate stock is a fine fallback
+                emit(f"Extrusion fit skipped: {type(exc).__name__}")
 
     with stage("Turning", "Measuring the turned profile…"):
         try:

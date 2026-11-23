@@ -12,6 +12,9 @@ the tests see. Tests of the custom library pass their own files.
 Likewise the shop tuning folder (machining/tuning.py) is pointed at an empty
 temporary folder, so a developer's own tuning cannot change any estimate the
 tests check. Tests of the tuning library pass their own folders.
+
+And settings.json (the sheet cutoff and the stock allowances) is pointed at
+a file that never exists, so every test sees the shipped defaults.
 """
 import os as _os
 import tempfile as _tempfile
@@ -21,3 +24,4 @@ from partestimator.machining.geometry import extrusions as _extrusions
 
 _extrusions.CUSTOM_PATH = _Path(__file__).resolve().parent / "no_custom_extrusions.csv"
 _os.environ["PE_TUNING_DIR"] = str(_Path(_tempfile.gettempdir()) / "partestimator-tests-no-tuning")
+_os.environ["PE_SETTINGS"] = str(_Path(__file__).resolve().parent / "no_settings.json")

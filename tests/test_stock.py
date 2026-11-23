@@ -427,6 +427,37 @@ class TestSurfaceSampling(unittest.TestCase):
         self.assertEqual(len(a), len(pts) + ex.MAX_POINTS)
 
 
+class TestFillsOutline(unittest.TestCase):
+    """An extrusion is only picked on its own when the part reaches across it."""
+
+    def setUp(self):
+        self.angle = ex.find("angle", "AND10133-2004")
+        self.assertIsNotNone(self.angle)
+
+    def test_a_part_across_both_legs_fills_it(self):
+        ex_, ey = self.angle.envelope_in
+        self.assertTrue(ex.fills_outline(self.angle, (ex_, ey)))
+        self.assertTrue(ex.fills_outline(self.angle, (ex_ - 0.1, ey - 0.1)))
+
+    def test_a_flat_part_in_one_leg_does_not(self):
+        self.assertFalse(ex.fills_outline(self.angle, (2.0, 0.25)))
+        self.assertFalse(ex.fills_outline(self.angle, (0.25, 2.0)))
+
+    def test_the_allowance_grows_with_the_profile(self):
+        ex_, ey = self.angle.envelope_in
+        short = max(ex.FILL_SHORT_IN, ex.FILL_SHORT_FRACTION * ex_)
+        self.assertTrue(ex.fills_outline(self.angle, (ex_ - short + 1e-6, ey)))
+        self.assertFalse(ex.fills_outline(self.angle, (ex_ - short - 1e-3, ey)))
+
+    def test_the_least_metal_pick_skips_an_angle_for_a_flat_part(self):
+        strip = box(6.0, 2.0, 0.25)
+        loose = ex.best_profile(ex.load_profiles(), strip, part_volume_in3=3.0,
+                                require_fill=False)
+        self.assertIsNotNone(loose)                 # it would fit in a leg...
+        best = ex.best_profile(ex.load_profiles(), strip, part_volume_in3=3.0)
+        self.assertTrue(best is None or ex.fills_outline(best, (2.0, 0.25)))
+
+
 class TestCustomLibrary(unittest.TestCase):
     """custom_extrusions.csv: the user's own dies, beside the launcher."""
 

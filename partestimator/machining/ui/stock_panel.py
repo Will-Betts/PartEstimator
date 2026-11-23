@@ -463,6 +463,19 @@ class StockControls(QWidget):
         self._show_for_type()
         self._apply(stock, emit=emit)
 
+    def refresh_allowances(self) -> None:
+        """The stock allowances changed: a recommended stock is resized to
+        the new rules, an extrusion at its recommended length is recut. A
+        size typed by hand is kept."""
+        s = self._stock
+        if s is None:
+            return
+        if s.is_extrusion:
+            keep = abs(s.length_in - s.recommended_length_in) > st.SAME_SIZE_TOL_IN
+            self._apply(self._extrusion(s.length_in if keep else None))
+        else:
+            self._restock()
+
     def clear(self) -> None:
         self._rect = self._cyl = self._stock = self._part_volume = self._points = None
         self._auto_rect = self._all_points = self._base_axes = self._auto_cyl = None
@@ -660,9 +673,16 @@ class StockControls(QWidget):
 
     def _best_profile(self):
         """The profile that fits this part with the least material, from the
-        catalog and the AND / AMS standards alike."""
-        return ex.best_profile(ex.load_profiles(), self._rect, self._cyl,
-                               part_volume_in3=self._part_volume, points_mm=self._points)
+        catalog and the AND / AMS standards alike. One the part reaches
+        across if there is one; asked for an extrusion by hand, any that
+        holds it will do."""
+        for fill in (True, False):
+            best = ex.best_profile(ex.load_profiles(), self._rect, self._cyl,
+                                   part_volume_in3=self._part_volume, points_mm=self._points,
+                                   require_fill=fill)
+            if best is not None:
+                return best
+        return None
 
     def _show_for_type(self) -> None:
         kind = self.type_combo.currentText()

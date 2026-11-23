@@ -130,7 +130,7 @@ override it, set `$env:PE_PYTHON` or put the full path to `python.exe` in
 |---|---|
 | `pe.ps1` | The entry point (see above). The `PIP_*` settings it applies last only while it runs; your shell is left as it was. |
 | `installed-lock.txt` | Written by the first `setup`: the exact package set that resolved. Later setups install from it. It is discarded when `requirements.txt` changes. |
-| `settings.json` | Created when you change Settings. Holds the sheet metal thickness cutoff. |
+| `settings.json` | Created when you change Settings. Holds the sheet metal thickness cutoff and the machining stock allowances. |
 | `part_estimator.log` | Log of the last run (operations and counts only, no file paths). |
 | `last_error.log` | Written only if the app fails to start. |
 
@@ -286,9 +286,25 @@ overlay, feature row and export all follow it at once.
 - A new part opens on the **recommended** stock: round bar for round work,
   otherwise plate, unless an extrusion profile holds the whole part with
   less material than that plate, in which case it opens on the profile.
+  The part must also reach across the profile's whole outline (within
+  1/8", or 10% on a large profile, in both directions): a flat part that
+  only fills one leg of an angle stays on plate. Solid hex bar is exempt.
   Hover over the stock table for the rule behind the size.
 - **Snap to minimum** gives the part's own bounding box, with no cleanup or
   work-holding allowance. **Snap to recommended** goes back to the rules.
+- **Stock allowances** are in **Settings…**: what the recommended stock
+  adds to the part before rounding up to the next 1/4".
+
+  | Allowance | Shipped | Applies to |
+  |---|---|---|
+  | Length | 1.000" | Plate, round bar and extrusion length (work-holding) |
+  | Width | 1.000" | Plate width (work-holding) |
+  | Thickness | 0.125" | Plate thickness over the 0.190" sheet break (cleanup) |
+  | Bar diameter | 0.125" | Round bar diameter (cleanup) |
+
+  Changing one resizes the open part's stock if it was the recommended one
+  (a size you typed is kept), and every part opened afterwards. Parts
+  already in the tuning library keep the stock they were saved with.
 - Typing any size makes it **custom**. Typing the recommended or minimum
   numbers back in is recognised as such.
 - A stock too small to enclose the part is flagged in red.
@@ -305,13 +321,20 @@ a menu of shapes (angle, channel, I-beam, tee, rectangular or round tube,
 hex bar) and aerospace standards (AND10133 to AND10141), each with its sizes
 or dash numbers in a submenu. Or type into it, e.g. `angle 2 x 2` or
 `AND10134-1205`. When you switch to Extrusion, the tool suggests the profile
-that holds the part with the least material, from both lists. Flat and
+that holds the part with the least material, from both lists (one the part
+reaches across if there is one, by the same rule). Flat and
 square bar are not listed: that is plate stock, so use **Plate / block**.
 
 **Part orientation in stock.** For plate and extrusion stock, the part is
-placed in its stock by the smallest box that fits it. When that is not how
-it will be held, press **Change part orientation…**. A small window opens
-beside the 3D view:
+squared up to its own flat faces, the way it would sit in the vise. The flat
+faces are grouped by the direction they face (top and bottom count
+together), and the direction with the most flat area becomes a pair of
+stock faces. The stock is then turned about it to line up with the biggest
+flat side faces square to that. A part with no such side faces is turned for
+the smallest rectangle around its outline instead, and a part that is mostly
+curved (under 15% flat area) gets the smallest box that fits. When that is
+not how it will be held, press **Change part orientation…**. A small window
+opens beside the 3D view:
 
 - **Make two faces parallel.** Click a flat face of the part (it turns
   green; curved faces are refused), then the face of the stock it should lie
@@ -323,7 +346,7 @@ beside the 3D view:
 - The stock's faces are named by size, so if the part is longest in the
   direction you picked, the window says the face ended up on the stock's end
   or side rather than its top.
-- **Automatic** goes back to the smallest box. A new part always opens on it.
+- **Automatic** goes back to the squared-up box. A new part always opens on it.
   While the orientation is set by hand, *set by hand* shows beside the
   button; hover over it for what was done.
 - Stock size, bounding box, weight, features and cycle time all follow the
@@ -394,8 +417,8 @@ them too.
   inside its section, and the 3D view draws it in that pose.
 - It runs along whichever direction gives the shortest cut.
 - **Minimum length** is the part's length along the profile.
-  **Recommended length** is that plus 1.00", rounded up to the next 1/4"
-  (the same rule as L for plate).
+  **Recommended length** is that plus the length allowance (1.00" as
+  shipped), rounded up to the next 1/4" (the same rule as L for plate).
 - The length is editable, and the two snap buttons set it to the minimum or
   the recommended length.
 
