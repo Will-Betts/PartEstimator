@@ -142,6 +142,10 @@ class StockControls(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Set by the window: rect box -> the recommended PLATE for it, or
+        # None for the plain rule. Tabbed fixturing grows the plate so a
+        # frame stands outside the channel.
+        self.recommend_plate = None
         self._rect = None
         self._auto_rect = None
         self._cyl = None
@@ -445,7 +449,7 @@ class StockControls(QWidget):
         self._updating = False
         self._show_for_type()
         stock = (self._extrusion(None) if profile is not None
-                 else st.snap(KIND_OF[kind], st.RECOMMENDED, rect_box, cylinder))
+                 else self._snap(KIND_OF[kind], st.RECOMMENDED))
         self._apply(stock, emit=emit)
         return stock
 
@@ -497,7 +501,7 @@ class StockControls(QWidget):
                       else self._stock.min_length_in)
             self._apply(self._extrusion(length))
             return
-        self._apply(st.snap(KIND_OF[kind], basis, self._rect, self._cyl))
+        self._apply(self._snap(KIND_OF[kind], basis))
 
     def edit_custom_library(self) -> None:
         """Open the custom library in the system's editor for .csv files,
@@ -596,11 +600,10 @@ class StockControls(QWidget):
             basis = self._stock.basis if self._stock is not None else st.RECOMMENDED
             if (basis == st.CUSTOM and self._stock is not None
                     and self._stock.is_round == want_round):
-                self._apply(st.classify_basis(self._stock, self._rect, self._cyl))
+                self._apply(self._classify(self._stock))
             else:
-                self._apply(st.snap(KIND_OF[kind], basis if basis in
-                                    (st.RECOMMENDED, st.MINIMUM) else st.RECOMMENDED,
-                                    self._rect, self._cyl))
+                self._apply(self._snap(KIND_OF[kind], basis if basis in
+                                       (st.RECOMMENDED, st.MINIMUM) else st.RECOMMENDED))
 
     def _show_orientation(self) -> None:
         if not hasattr(self, "orient_row"):
@@ -631,7 +634,7 @@ class StockControls(QWidget):
                 self._updating = False
             self._apply(self._extrusion(None))
         else:
-            self._apply(st.snap(KIND_OF[kind], st.RECOMMENDED, self._rect, self._cyl))
+            self._apply(self._snap(KIND_OF[kind], st.RECOMMENDED))
 
     def _on_profile_changed(self) -> None:
         if self._updating or self.type_combo.currentText() != EXTRUSION:
@@ -650,9 +653,33 @@ class StockControls(QWidget):
             stock = st.custom_cylindrical(a, length)
         else:
             stock = st.custom_rectilinear(a, b, length)
-        self._apply(st.classify_basis(stock, self._rect, self._cyl), reflect=False)
+        self._apply(self._classify(stock), reflect=False)
 
     # -- internals ---------------------------------------------------------
+
+    def _snap(self, kind: str, basis: str):
+        """st.snap, with the window's recommended plate when it has one."""
+        if (basis == st.RECOMMENDED and kind == "rectilinear" and self._rect is not None
+                and self.recommend_plate is not None):
+            s = self.recommend_plate(self._rect)
+            if s is not None:
+                return s
+        return st.snap(kind, basis, self._rect, self._cyl)
+
+    def _classify(self, stock):
+        """st.classify_basis, knowing the window's recommended plate."""
+        hooked = (stock is not None and stock.kind == "rectilinear" and self._rect is not None
+                  and self.recommend_plate is not None)
+        ref = self.recommend_plate(self._rect) if hooked else None
+        if ref is None:
+            return st.classify_basis(stock, self._rect, self._cyl)
+        from dataclasses import replace
+
+        if st.same_size(stock, ref):
+            return replace(stock, basis=st.RECOMMENDED, is_sheet=ref.is_sheet)
+        if st.same_size(stock, st.snap("rectilinear", st.MINIMUM, self._rect, None)):
+            return replace(stock, basis=st.MINIMUM)
+        return replace(stock, basis=st.CUSTOM)
 
     def _current_profile(self):
         value = self.profile.currentText()

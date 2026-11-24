@@ -103,6 +103,24 @@ def _child_turning(project_root: str, path: str, cylinder, holes, queue) -> None
         queue.put((_ERROR, (type(exc).__name__, str(exc), traceback.format_exc())))
 
 
+def _child_fixture(project_root: str, path: str, plan: dict, out_path: str, queue) -> None:
+    try:
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        from partestimator.machining.geometry import fixture_cad
+
+        def progress(msg):
+            try:
+                queue.put((_PROGRESS, msg))
+            except Exception:  # noqa: BLE001
+                pass
+
+        result = fixture_cad.export(path, plan, out_path, progress=progress)
+        queue.put((_RESULT, result))
+    except Exception as exc:  # noqa: BLE001
+        queue.put((_ERROR, (type(exc).__name__, str(exc), traceback.format_exc())))
+
+
 class _QueuePump(QObject):
     """Blocks on the child's queue and re-emits entries as Qt signals."""
 
@@ -176,6 +194,11 @@ class AnalysisRunner(QObject):
         """The turned profile about `cylinder`'s axis (a TurningGeometry)."""
         self._start(_child_turning, (path, cylinder, list(holes or [])))
 
+    def start_fixture_export(self, path: str, plan: dict, out_path: str):
+        """The tabbed-fixturing bodies for `plan` (a FixturePlan as a dict),
+        written to `out_path`: {"path", "problems", "volumes_in3"}."""
+        self._start(_child_fixture, (path, plan, out_path))
+
     def _start(self, entry, args):
         self._cancelled = False
         # The folder that CONTAINS the `partestimator` package, so the spawned child
@@ -193,6 +216,7 @@ class AnalysisRunner(QObject):
             # Couldn't spawn -- fall back to in-process execution so the app
             # still works, just without the responsiveness benefit.
             self.progress.emit(f"(running in-process: {exc})")
+            self._process = None        # never started: nothing to join
             self._run_inprocess(entry, args, project_root)
             return
 

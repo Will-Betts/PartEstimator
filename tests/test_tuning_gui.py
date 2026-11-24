@@ -43,6 +43,13 @@ class TestTuningLibrary(unittest.TestCase):
         cls.folder = cls.tmp / "lib"
         cls.env = mock.patch.dict(os.environ, {tuning.ENV_DIR: str(cls.folder)})
         cls.env.start()
+        # Tabbed fixturing sets a plate part's setups from its procedure; these
+        # tests are about the library, so they run without it (test_fixture_gui
+        # covers tabbed parts in the library).
+        from partestimator.machining.geometry import fixture
+
+        cls.fixture = fixture
+        fixture.set_standard(fixture.FixtureSettings(enabled=False))
         src = cls.tmp / "src"
         src.mkdir()
         with contextlib.redirect_stdout(io.StringIO()):
@@ -55,6 +62,7 @@ class TestTuningLibrary(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.env.stop()
+        cls.fixture.set_standard(None)
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def spin(self, busy, timeout=300):

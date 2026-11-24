@@ -130,7 +130,7 @@ override it, set `$env:PE_PYTHON` or put the full path to `python.exe` in
 |---|---|
 | `pe.ps1` | The entry point (see above). The `PIP_*` settings it applies last only while it runs; your shell is left as it was. |
 | `installed-lock.txt` | Written by the first `setup`: the exact package set that resolved. Later setups install from it. It is discarded when `requirements.txt` changes. |
-| `settings.json` | Created when you change Settings. Holds the sheet metal thickness cutoff and the machining stock allowances. |
+| `settings.json` | Created when you change Settings. Holds the sheet metal thickness cutoff, the machining stock allowances and the tabbed-fixturing standard. |
 | `part_estimator.log` | Log of the last run (operations and counts only, no file paths). |
 | `last_error.log` | Written only if the app fails to start. |
 
@@ -431,6 +431,88 @@ Section areas are computed with **sharp corners**, so check the shipped
 sizes against your supplier's catalog.
 
 ---
+
+## Tabbed fixturing
+
+A shop standard for milled plate parts, so most of them need no fixture of
+their own. The part is cut out of its plate with a channel round its outline
+and held to the frame of left-over stock by small tabs, which are broken out
+at the end.
+
+**Two procedures**, chosen per part:
+
+- **Vertical, one operation (3+2 machine).** The blank stands on one edge in a
+  5-axis vise. Side 1 is faced down to the part, the channel is cut round the
+  outline to just past the middle, and the side-1 features are machined. The
+  blank turns 180° and side 2 gets the same. The two channel cuts meet,
+  leaving the tabs, centred in the thickness, holding the part.
+- **Flat, two operations.** For plate under the minimum thickness, or sticking
+  out of the jaws more than the set multiple of its thickness (tall, thin
+  plate chatters on edge). Op 1 faces the top, cuts the channel down to the
+  part's bottom and machines the top; the layer under the part stays as a
+  floor. Op 2 is flipped and faces the floor off; the tabs, standing on the
+  part's bottom, hold it. Sheet bought at the part's thickness has no floor,
+  so it is one operation with the channel cut through (on a spoilboard).
+
+The part is centred in its stock. The recommended plate grows, to the next
+1/4", wherever it has to so a frame of at least the set width stands outside
+the channel; standing in the vise, the clamped edge also gets the vise's grip
+plus clearance for the holder. A size you type is kept, with a warning if
+its frame is too thin.
+
+**Tabs** go one per tab spacing of outline (at least the minimum), spread
+evenly and slid onto straight edges, away from corners and arcs. Each is
+checked against the part's cross-section at the tab's height, so a tab never
+lands where the part's wall is recessed. The channel width (the profiling
+cutter) comes from a table by the depth cut from one side.
+
+**In the Machining tab**, Part Inputs > **Fixturing** shows the procedure and
+why, and draws the channel and tabs in orange with the stock. A part can be
+taken off tabs there, its sides flipped, the vise put on another edge (a
+long edge keeps the stick-out lowest), and the channel width or tab count
+set by hand. Unchecked, only the checkbox shows; for lathe work, round bar
+and extrusions, which are never tabbed, the section is hidden. A tabbed
+part's **Operations** start at its procedure's count (one standing in the
+vise, two flat, filled in again when the procedure changes) and can be
+changed like any other part's.
+
+**Export fixture STEP…** writes one STEP file holding, overlaid:
+
+| Body | Vertical | Flat |
+|---|---|---|
+| `Stock` | the blank | the blank |
+| `After side 1` / `After op 1` | side 1 faced, channel to the middle, side-1 half machined | top faced, channel to the part's bottom, floor still on |
+| `After side 2` / `After op 2` | the part held in its frame by the tabs | the same, floor faced off |
+| `Part` | the finished part | the finished part |
+
+They are in millimetres, in the stock's frame: origin at the stock corner on
+the clamped edge (flat: the bottom front-left corner), X along the clamped
+edge, Y up out of the jaws, Z out of side 1. Each body is named and
+coloured. If a tab does not join the part, the export says which.
+
+**The estimate** follows the procedure:
+- roughing is only the facing, the channel and what lies inside it (the
+  frame stays on);
+- the channel ring is charged at `fixture_channel_mrr_fraction` of the open
+  rate (a slotting cutter);
+- breaking out each tab costs `tab_breakoff_s` of hand work;
+- the vertical procedure adds a `fixture_turn_s` turn between sides.
+
+All three are rows in `shop_profile.csv`, and the tuning library records
+each part's layout so its estimate matches the window's.
+
+**Settings… > Tabbed fixturing** holds the standard:
+
+| Setting | Shipped |
+|---|---|
+| Tab milled plate parts by default (each part can still be ticked or unticked) | on |
+| Tab height / width | 0.060" / 0.250" |
+| One tab per / at least | 4" of outline / 3 |
+| Channel width, cut from one side up to 0.50" / 1.00" / deeper | 0.250" / 0.375" / 0.500" |
+| Frame outside the channel, at least | 0.250" |
+| Vise grip / clearance above the jaws | 0.188" / 0.375" |
+| Stand on edge from (thickness) | 0.250" |
+| Stick-out above the jaws, at most | 10 x thickness |
 
 ## Shop tuning: fitting the estimate to your own parts
 

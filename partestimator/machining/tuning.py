@@ -462,7 +462,16 @@ def capture(results: dict, stock, material: str = "") -> dict:
         "features": _plain(dict(feats)),
         "holes": holes,
         "turning": turning,
+        # Tabbed fixturing (geometry/fixture.py): the layout the estimate
+        # charges the frame, channel and tabs from, for this stock.
+        "fixture": _fixture_dict(results.get("fixture")),
     }
+
+
+def _fixture_dict(plan):
+    if plan is None:
+        return None
+    return plan if isinstance(plan, dict) else plan.to_dict()
 
 
 @dataclass
@@ -636,14 +645,23 @@ def default_workers() -> int:
     return max(1, min(3, (os.cpu_count() or 2) // 2))
 
 
-def _capture_worker(step_path: str, material: str, allowances: dict | None = None) -> dict:
+def _capture_worker(step_path: str, material: str, allowances: dict | None = None,
+                    fixture_standard: dict | None = None) -> dict:
     """Runs in a child process: analyse one file and capture it, with the
-    parent's stock allowances (a new process starts on the shipped ones)."""
-    from .geometry import pipeline
+    parent's stock allowances and fixturing standard (a new process starts
+    on the shipped ones)."""
+    from .geometry import fixture, pipeline
 
     results = pipeline.compute_analysis(
         step_path, options={**ANALYSIS_OPTIONS, "stock_allowances": allowances})
     stock = auto_stock(results)
+    standard = fixture.set_standard(fixture_standard)
+    removal, _why = cycle_time.auto_removal_type({**results, "stock": stock})
+    if fixture.applies(stock, removal, standard):
+        plan = fixture.plan_for_results(results, stock, standard, grow_stock=True)
+        if plan is not None:
+            stock = fixture.grown_stock(plan)
+            results["fixture"] = fixture.plan_for_results(results, stock, standard)
     return {"snapshot": capture(results, stock, material), "stock": stock_fields(stock)}
 
 
@@ -683,8 +701,12 @@ def capture_files(paths, material: str = "", workers: int | None = None,
             return orphans
         pool = cf.ProcessPoolExecutor(max_workers=max(1, min(n, len(batch))),
                                       mp_context=mp.get_context("spawn"))
+        from .geometry import fixture
+
         allowances = st.allowances()
-        futs = {pool.submit(_capture_worker, str(p), material, allowances): p for p in batch}
+        standard = fixture.standard().to_dict()
+        futs = {pool.submit(_capture_worker, str(p), material, allowances, standard): p
+                for p in batch}
         pending = set(futs)
         try:
             while pending:
@@ -748,6 +770,10 @@ def add_files(library: Library, paths, material: str = "", finish_uin: float = 6
                   operations=operations, stock_type=stock_type, stock_size=stock_size,
                   stock_profile=stock_profile, source_file=str(p.resolve()))
         snap = value["snapshot"]
+        plan = snap.get("fixture")
+        if plan:
+            # Tabbed: at least the setups its procedure takes (flat is two).
+            e.operations = max(int(operations), int(plan.get("operations") or 1))
         e.process, _why = cycle_time.auto_removal_type(
             {"derived": snap["features"], "stock": build_stock(e)}, profile)
         added.append(library.add(e, snap))
@@ -786,6 +812,13 @@ def prepare(e: Entry, snap: dict, profile=None) -> Prepared:
         feats.pop("material_density_lb_in3", None)
     results = {"holes": _holes(snap), "turning": _turning(snap), "stock": stock,
                "derived": feats}
+    from .geometry import fixture
+
+    plan = snap.get("fixture")
+    if plan is not None and fixture.matches_stock(plan, stock):
+        # Tabbed as captured. A stock changed since in the library has no
+        # layout to go by, so it is estimated without tabs.
+        results["fixture"] = plan
     removal = e.process
     if removal == "auto":
         removal, _why = cycle_time.auto_removal_type(results, profile)

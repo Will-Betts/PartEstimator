@@ -114,6 +114,24 @@ LOAD_UNLOAD_PER_LB_MIN = 0.08 # heavier parts take longer to handle
 FINISH_TIERS_UIN = (250.0, 125.0, 63.0, 32.0, 16.0)
 
 
+#: Terms done by hand at the open door: in door-to-door, not in the
+#: machine cycle, and never charged the rapid allowance.
+HAND_TERMS = ("Deburring", "Tab break-off")
+
+
+def fixture_plan(results: dict | None):
+    """The tabbed-fixturing plan in `results` (geometry/fixture.py), as a
+    FixturePlan, or None when the part is not tabbed."""
+    fx = (results or {}).get("fixture")
+    if fx is None:
+        return None
+    if isinstance(fx, dict):
+        from .fixture import FixturePlan
+
+        fx = FixturePlan.from_dict(fx)
+    return fx
+
+
 def auto_removal_type(results: dict, profile=None) -> tuple[str, str]:
     """("mill" or "lathe", why). Round stock with most of its surface turned
     is lathe work; everything else is milled."""
@@ -199,7 +217,7 @@ class CycleEstimate:
     def as_rows(self) -> list[tuple[str, str, str]]:
         """(label, value, note) triples for display."""
         rows = [(t.name, f"{t.minutes:,.2f} min", t.detail)
-                for t in self.terms if t.name != "Deburring"]
+                for t in self.terms if t.name not in HAND_TERMS]
         rows.append(("Cut subtotal", f"{self.cut_minutes:,.2f} min", ""))
         rows.append(("Rapids / approach", f"{self.rapid_minutes:,.2f} min",
                      f"{self.rapid_fraction:.0%} of cut time"))
@@ -210,9 +228,11 @@ class CycleEstimate:
                      f"{self.operations} operation(s)" if self.operations > 1 else ""))
         rows.append(("Load / unload", f"{self.load_unload_minutes:,.2f} min",
                      f"x{self.operations} setups" if self.operations > 1 else ""))
-        if self.deburr_minutes > 0:
-            rows.append(("Deburring", f"{self.deburr_minutes:,.2f} min",
-                         "hand work at the open door — outside the machine cycle"))
+        for t in self.terms:
+            if t.name in HAND_TERMS and t.minutes > 0:
+                rows.append((t.name, f"{t.minutes:,.2f} min",
+                             "hand work at the open door — outside the machine cycle"
+                             + (f"; {t.detail}" if t.name != "Deburring" else "")))
         if self.calibration != 1.0:
             rows.append(("Shop calibration", f"x{self.calibration:,.2f}",
                          "calibrate_overall (shop profile or shop tuning)"))
@@ -437,6 +457,11 @@ def estimate_cycle_time(features: dict, results: dict, table,
     # the stock does not: a user-chosen size tighter than the hull, or an
     # extrusion whose own section already leaves the concave regions open.
     removable = max(stock_vol - part_vol, 0.0) if stock_vol > 0 else None
+    fx = fixture_plan(results) if removal_type == "mill" else None
+    if fx is not None:
+        # Tabbed fixturing leaves the frame of stock on: only the facing, the
+        # channel and what lies inside it come out.
+        removable = max(float(fx.removed_volume_in3), 0.0)
     pocket_vol = max(hull_vol - part_vol, 0.0)
     if removable is not None:
         pocket_vol = min(pocket_vol, removable)
@@ -445,6 +470,11 @@ def estimate_cycle_time(features: dict, results: dict, table,
     outside_vol = max(removable - pocket_vol, 0.0) if removable is not None else 0.0
     basis = ("stock − hull" if stock_vol + 1e-9 >= hull_vol
              else "stock − part − pockets (stock is tighter than the hull)")
+    channel_vol = 0.0
+    if fx is not None:
+        channel_vol = min(float(fx.channel_volume_in3), outside_vol)
+        outside_vol -= channel_vol
+        basis = "facing + stock inside the channel, less the part's pockets (frame left on)"
     if mrr_open > 0 and outside_vol > 0:
         est.terms.append(TimeTerm(
             name="Outside roughing", minutes=outside_vol / mrr_open,
@@ -453,6 +483,20 @@ def estimate_cycle_time(features: dict, results: dict, table,
             limited_by=bound,
             detail=f"{basis} = {outside_vol:,.2f} in³ at "
                    f"{mrr_open:,.2f} in³/min ({bound}-limited: {detail})"))
+
+    # --- 1b. the tab channel --------------------------------------------
+    # Slotted with a cutter as wide as the channel, buried on both sides:
+    # a fraction of the open rate, its own (tunable) shop-profile setting.
+    if fx is not None and channel_vol > 0 and mrr_open > 0:
+        frac = p("fixture_channel_mrr_fraction", 0.35) or 0.35
+        rate_ch = mrr_open * frac
+        est.terms.append(TimeTerm(
+            name="Tab channel", minutes=channel_vol / rate_ch,
+            quantity=channel_vol, quantity_units="in³",
+            rate=rate_ch, rate_units="in³/min", limited_by=bound,
+            detail=f"{fx.channel_width_in:.3f}\" channel round {fx.perimeter_in:,.1f} in of "
+                   f"outline = {channel_vol:,.2f} in³ at {rate_ch:,.2f} in³/min "
+                   f"({frac:.0%} of open roughing)"))
 
     # --- 2. pocket roughing --------------------------------------------
     # Two separate reductions, not one. `pocket_engagement` is a RATE
@@ -660,13 +704,23 @@ def estimate_cycle_time(features: dict, results: dict, table,
                        f" + {concave:,.0f} in concave x{p('deburr_concave_fraction', 0.0):.2f});"
                        f" tangent edges excluded"))
 
+    # --- 7b. tab break-off -----------------------------------------------
+    if fx is not None and fx.tab_count:
+        tab_s = p("tab_breakoff_s", 45.0)
+        if tab_s > 0:
+            est.terms.append(TimeTerm(
+                name="Tab break-off", minutes=fx.tab_count * tab_s / 60.0,
+                quantity=float(fx.tab_count), quantity_units="tabs",
+                detail=f"{fx.tab_count} tabs at {tab_s:.0f} s each to break out and "
+                       f"file flush"))
+
     # --- non-cutting ----------------------------------------------------
     # Deburring is hand work at the open door. It belongs in door-to-door
     # but NOT in the machine cycle, and it must not attract the rapid
     # allowance -- there is no spindle involved.
-    est.deburr_minutes = sum(t.minutes for t in est.terms if t.name == "Deburring")
+    est.deburr_minutes = sum(t.minutes for t in est.terms if t.name in HAND_TERMS)
     est.cut_minutes = sum(t.minutes for t in est.terms
-                          if t.name != "Deburring")
+                          if t.name not in HAND_TERMS)
     # Hole and tap terms already carry their own positioning and retract
     # time, so the blanket rapid allowance must not be charged on them
     # again.
@@ -701,7 +755,18 @@ def estimate_cycle_time(features: dict, results: dict, table,
                    f"{index_s:.0f} s per index"))
         # Deburring stays out of the machine cycle here too, or it is
         # charged twice: once in cut time and again in door-to-door.
-        est.cut_minutes = sum(t.minutes for t in est.terms if t.name != "Deburring")
+        est.cut_minutes = sum(t.minutes for t in est.terms if t.name not in HAND_TERMS)
+
+    # --- tabbed fixturing: the turn between sides ---------------------------
+    if fx is not None and fx.procedure == "vertical":
+        turn_min = p("fixture_turn_s", 15.0) / 60.0
+        if turn_min > 0:
+            est.terms.append(TimeTerm(
+                name="Turn 180° (tabbed)", minutes=turn_min,
+                quantity=1.0, quantity_units="turn",
+                detail="the blank turns in the vise between side 1 and side 2"))
+            est.index_minutes += turn_min
+            est.cut_minutes = sum(t.minutes for t in est.terms if t.name not in HAND_TERMS)
 
     est.machine_cycle_minutes = (est.cut_minutes + est.rapid_minutes
                                   + est.tool_change_minutes)
@@ -720,6 +785,12 @@ def estimate_cycle_time(features: dict, results: dict, table,
     # only has so much material to remove -- but the fixed overheads
     # repeat, which is why a two-op part is more than twice as expensive
     # as half a one-op part.
+    if fx is not None:
+        # The procedure suggests the setups (one standing in the vise, two
+        # flat); a count given by hand stands.
+        if operations is None:
+            operations = int(fx.operations)
+        est.warnings.extend(fx.warnings)
     if operations is None:
         operations = int(p("operations", 1.0)) or 1
     operations = max(int(operations), 1)
