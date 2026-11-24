@@ -445,13 +445,13 @@ at the end.
   5-axis vise. Side 1 is faced down to the part, the channel is cut round the
   outline to just past the middle, and the side-1 features are machined. The
   blank turns 180° and side 2 gets the same. The two channel cuts meet,
-  leaving the tabs, centred in the thickness, holding the part.
+  leaving the tabs holding the part.
 - **Flat, two operations.** For plate under the minimum thickness, or sticking
   out of the jaws more than the set multiple of its thickness (tall, thin
   plate chatters on edge). Op 1 faces the top, cuts the channel down to the
   part's bottom and machines the top; the layer under the part stays as a
-  floor. Op 2 is flipped and faces the floor off; the tabs, standing on the
-  part's bottom, hold it. Sheet bought at the part's thickness has no floor,
+  floor. Op 2 is flipped and faces the floor off; the tabs hold the part.
+  Sheet bought at the part's thickness has no floor,
   so it is one operation with the channel cut through (on a spoilboard).
 
 The part is centred in its stock. The recommended plate grows, to the next
@@ -461,10 +461,16 @@ plus clearance for the holder. A size you type is kept, with a warning if
 its frame is too thin.
 
 **Tabs** go one per tab spacing of outline (at least the minimum), spread
-evenly and slid onto straight edges, away from corners and arcs. Each is
-checked against the part's cross-section at the tab's height, so a tab never
-lands where the part's wall is recessed. The channel width (the profiling
-cutter) comes from a table by the depth cut from one side.
+evenly round it and kept clear of sharp corners; curved edges take tabs as
+well as flat ones. Each tab finds its own height. The part is probed from
+the channel at a stack of heights and across the tab's width, and the tab
+goes in the middle of the longest stretch where the part's wall reaches the
+outline. On a contoured edge that is wherever the part is widest; past a
+groove or a hole drilled into the edge, it moves above or below it. Where
+the wall never quite reaches the outline, the tab reaches in to the nearest
+surface (up to 0.5"). Its end must always sit in solid part, never in a hole
+or a pocket. Spots needing less reach are preferred. The channel width (the
+profiling cutter) comes from a table by the depth cut from one side.
 
 **In the Machining tab**, Part Inputs > **Fixturing** shows the procedure and
 why, and draws the channel and tabs in orange with the stock. A part can be
@@ -505,7 +511,7 @@ each part's layout so its estimate matches the window's.
 
 | Setting | Shipped |
 |---|---|
-| Tab milled plate parts by default (each part can still be ticked or unticked) | on |
+| Tab milled plate parts by default (each part can still be ticked or unticked) | off |
 | Tab height / width | 0.060" / 0.250" |
 | One tab per / at least | 4" of outline / 3 |
 | Channel width, cut from one side up to 0.50" / 1.00" / deeper | 0.250" / 0.375" / 0.500" |
@@ -792,6 +798,17 @@ The arithmetic tests use a small synthetic rate table and shop profile
 `shop_profile.csv` does not break them. The shipped data files are checked
 separately for completeness and for sensible behaviour, such as harder
 materials taking longer, but no exact minutes are pinned against them.
+
+**Test coverage.** `tools/linecov/report.py` runs the full suite (the same run
+as `.\pe.ps1 test -Full`) and reports, per file and in total, how many lines of
+`partestimator` it executed, including inside the worker processes. It uses
+only the standard library (Python 3.12+), so nothing is downloaded.
+
+```powershell
+.venv\Scripts\python tools\linecov\report.py                  # run, then report
+.venv\Scripts\python tools\linecov\report.py --no-run         # report the last run
+.venv\Scripts\python tools\linecov\report.py --missing app.py # ...and list its unrun lines
+```
 
 The full suite, including the CAD-kernel and GUI tests, runs through
 `.\pe.ps1 test -Full`, which also picks up `tests/timing/`. It makes the same

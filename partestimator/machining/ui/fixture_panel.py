@@ -34,7 +34,7 @@ class FixtureControls(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
 
         self.chk = QCheckBox("Tabbed fixturing")
-        self.chk.setChecked(True)
+        self.chk.setChecked(False)
         self.chk.setToolTip(
             "Cut the part out of its plate with a channel round its outline, held to\n"
             "the frame of left-over stock by tabs: the shop's standard procedure.\n"

@@ -1,7 +1,7 @@
 """Camera orientation for the 3D view. Kernel-free, and therefore testable.
 
-WHY THIS IS NOT IN `smt/gui/view3d.py`
---------------------------------------
+WHY THIS IS NOT IN THE VIEW ITSELF
+----------------------------------
 Because it was wrong, and nothing could tell me.
 
 v7 rotated the view with an azimuth and an elevation angle, and got the vertical

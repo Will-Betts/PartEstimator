@@ -48,6 +48,42 @@ def l_mesh(l_in=4.0, a_in=3.0, b_in=2.0, t_in=0.25):
     return np.vstack([p1, p2]), np.vstack([t1, t2 + len(p1)])
 
 
+def prism_mesh(poly_in, h_in):
+    """A closed prism: the convex polygon `poly_in` (inches, CCW) run up h."""
+    poly = np.asarray(poly_in, dtype=float)
+    n = len(poly)
+    pts = np.vstack([np.column_stack([poly, np.zeros(n)]),
+                     np.column_stack([poly, np.full(n, h_in)])]) * MM
+    tris = []
+    for k in range(1, n - 1):
+        tris += [(0, k + 1, k), (n, n + k, n + k + 1)]           # bottom, top fans
+    for k in range(n):
+        j = (k + 1) % n
+        tris += [(k, j, n + j), (k, n + j, n + k)]
+    return pts, np.array(tris)
+
+
+def layers_mesh(layers, l_in=6.0, w_in=4.0):
+    """A part built as a stack of centred boxes, [(z0, z1, inset), ...]:
+    each layer is the l x w outline less `inset` all round."""
+    pts, tris = [], []
+    for z0, z1, inset in layers:
+        p, t = box_mesh(l_in - 2 * inset, w_in - 2 * inset, z1 - z0,
+                        origin=(inset, inset, z0))
+        tris.append(t + sum(len(q) for q in pts))
+        pts.append(p)
+    return np.vstack(pts), np.vstack(tris)
+
+
+def plan_layers(layers, **kw):
+    pts, tris = layers_mesh(layers)
+    top = max(z1 for _z0, z1, _i in layers)
+    ext = np.array([6.0, 4.0, top]) * MM
+    vol = sum((6 - 2 * i) * (4 - 2 * i) * (z1 - z0) for z0, z1, i in layers)
+    return fx.plan(pts, tris, np.eye(3), ext, st.rectilinear_stock(ext), vol,
+                   planes=flat_planes(6.0, 4.0), **kw)
+
+
 def flat_planes(l_in, w_in):
     area = l_in * w_in * MM * MM
     return [((0, 0, 1), area), ((0, 0, -1), area)]
@@ -165,11 +201,12 @@ class TestTabs(unittest.TestCase):
         self.assertEqual(plan_box(2.0, 1.0, 0.5).tab_count, 3)      # the minimum
         self.assertEqual(plan_box(6.0, 4.0, 0.5, tab_count=8).tab_count, 8)
 
-    def test_tabs_sit_on_straight_edges_and_cross_the_channel(self):
+    def test_tabs_sit_on_the_edges_and_cross_the_channel(self):
         p = plan_box(6.0, 4.0, 0.5)
         lo, hi = np.array(p.part_lo_in), np.array(p.part_hi_in)
         for t in p.tabs:
             self.assertTrue(t.on_straight)
+            self.assertLess(t.inset, 0.03)               # the wall is at the outline
             on_x = min(abs(t.x - lo[0]), abs(t.x - hi[0])) < 0.02
             on_y = min(abs(t.y - lo[1]), abs(t.y - hi[1])) < 0.02
             self.assertTrue(on_x or on_y, (t.x, t.y))
@@ -178,34 +215,94 @@ class TestTabs(unittest.TestCase):
             ends = (lo[1], hi[1]) if on_x else (lo[0], hi[0])
             self.assertGreaterEqual(min(abs(along - e) for e in ends),
                                     fx.TAB_CORNER_MARGIN_IN + t.width / 2 - 0.02)
-            self.assertAlmostEqual(t.length, p.channel_width_in + 2 * fx.TAB_OVERLAP_IN)
+            self.assertAlmostEqual(t.length,
+                                   p.channel_width_in + t.inset + 2 * fx.TAB_OVERLAP_IN)
 
-    def test_vertical_tabs_are_centred_flat_tabs_on_the_bottom(self):
-        v = plan_box(6.0, 4.0, 0.5)
-        zm = (v.part_lo_in[2] + v.part_hi_in[2]) / 2
-        for t in v.tabs:
-            self.assertAlmostEqual((t.z0 + t.z1) / 2, zm)
-            self.assertAlmostEqual(t.z1 - t.z0, 0.060)
-        f = plan_box(6.0, 4.0, 0.15)
-        for t in f.tabs:
-            self.assertAlmostEqual(t.z0, f.part_lo_in[2])
-            self.assertAlmostEqual(t.z1, f.part_lo_in[2] + 0.060)
+    def test_a_straight_wall_gets_its_tabs_in_the_middle(self):
+        for p in (plan_box(6.0, 4.0, 0.5), plan_box(6.0, 4.0, 0.15)):
+            zm = (p.part_lo_in[2] + p.part_hi_in[2]) / 2
+            for t in p.tabs:
+                self.assertAlmostEqual((t.z0 + t.z1) / 2, zm, delta=0.02)
+                self.assertAlmostEqual(t.z1 - t.z0, 0.060)
+
+    def test_a_contoured_edge_gets_them_where_the_part_is_widest(self):
+        # Widest between 0.30 and 0.40 of a 1" thick part, tapering both ways.
+        p = plan_layers([(0.0, 0.1, 0.20), (0.1, 0.2, 0.10), (0.2, 0.3, 0.05),
+                         (0.3, 0.4, 0.0), (0.4, 0.6, 0.10), (0.6, 1.0, 0.25)])
+        zb = p.part_lo_in[2]
+        self.assertGreater(p.tab_count, 0)
+        for t in p.tabs:
+            self.assertAlmostEqual((t.z0 + t.z1) / 2 - zb, 0.35, delta=0.03)
+            self.assertLess(t.inset, 0.03)
+
+    def test_a_groove_round_the_edge_is_skipped(self):
+        # A 0.2" deep groove between 0.4 and 0.6: tabs go above or below it.
+        p = plan_layers([(0.0, 0.4, 0.0), (0.4, 0.6, 0.2), (0.6, 1.0, 0.0)])
+        zb = p.part_lo_in[2]
+        for t in p.tabs:
+            zc = (t.z0 + t.z1) / 2 - zb
+            self.assertTrue(abs(zc - 0.2) < 0.03 or abs(zc - 0.8) < 0.03, zc)
+            self.assertLess(t.inset, 0.03)
+
+    def test_a_tab_reaches_in_to_the_nearest_surface(self):
+        # A lip thinner than a tab makes the outline; the body is 0.1" in.
+        # Every tab reaches in across the lip to join the body.
+        p = plan_layers([(0.0, 0.95, 0.1), (0.95, 0.975, 0.0)])
+        self.assertGreater(p.tab_count, 0)
+        for t in p.tabs:
+            self.assertAlmostEqual(t.inset, 0.1, delta=0.03)
+            self.assertAlmostEqual(t.length,
+                                   p.channel_width_in + t.inset + 2 * fx.TAB_OVERLAP_IN)
 
     def test_tabs_only_where_the_wall_is_at_their_height(self):
-        # An L standing in the vise: at mid-thickness only the upright leg's
-        # wall is there, so every tab goes on it.
+        # An L standing in the vise: away from the corner, only the upright
+        # leg's wall is near the outline at mid-height; each tab sits on
+        # solid part at its own height.
         pts, tris = l_mesh(4.0, 3.0, 2.0, 0.25)
         ext = np.array([4.0, 3.0, 2.0]) * MM
         p = fx.plan(pts, tris, np.eye(3), ext, st.rectilinear_stock(ext), 4 * (0.75 + 0.4375),
                     grow_stock=True)
         self.assertEqual(p.procedure, fx.VERTICAL)
         self.assertGreater(p.tab_count, 0)
-        section = fx.section_points(
-            np.asarray(pts) @ np.asarray(p.frame).T / MM - np.asarray(p.origin_mm) @
-            np.asarray(p.frame).T / MM, tris, (p.tabs[0].z0 + p.tabs[0].z1) / 2, 0.01)
+        plan_pts = (np.asarray(pts) - np.asarray(p.origin_mm)) @ np.asarray(p.frame).T / MM
         for t in p.tabs:
-            d = np.min(np.hypot(section[:, 0] - t.x, section[:, 1] - t.y))
-            self.assertLess(d, 0.05, (t.x, t.y))
+            section = fx.section_points(plan_pts, tris, (t.z0 + t.z1) / 2, 0.01)
+            root = np.array([t.x, t.y]) - np.array([t.nx, t.ny]) * t.inset
+            d = np.min(np.hypot(section[:, 0] - root[0], section[:, 1] - root[1]))
+            self.assertLess(d, 0.05, (t.x, t.y, t.z0))
+
+    def test_slanted_edges_take_tabs(self):
+        # A hexagonal plate: four of its six edges run at 60 degrees to the
+        # grid the outline is traced on. Tabs must not mistake the traced
+        # staircase for corners.
+        r = 2.0
+        hexagon = [(r * math.cos(math.radians(a)), r * math.sin(math.radians(a)))
+                   for a in range(0, 360, 60)]
+        pts, tris = prism_mesh(hexagon, 0.75)
+        ext = np.array([2 * r, math.sqrt(3) * r, 0.75]) * MM
+        p = fx.plan(pts, tris, np.eye(3), ext, st.rectilinear_stock(ext), 7.8,
+                    planes=flat_planes(4.0, 3.5))
+        self.assertEqual(len(p.outline[0]), 6)
+        self.assertEqual(p.tab_count, 3)                       # 12" / 4"
+        slanted = [t for t in p.tabs if 0.2 < abs(t.nx) < 0.95]
+        self.assertTrue(slanted, [(t.nx, t.ny) for t in p.tabs])
+        for t in p.tabs:
+            self.assertLess(t.inset, 0.03)
+
+    def test_a_round_part_takes_tabs_on_its_curve(self):
+        circle = [(1.5 * math.cos(a), 1.5 * math.sin(a))
+                  for a in np.linspace(0, 2 * math.pi, 96, endpoint=False)]
+        pts, tris = prism_mesh(circle, 0.5)
+        ext = np.array([3.0, 3.0, 0.5]) * MM
+        p = fx.plan(pts, tris, np.eye(3), ext, st.rectilinear_stock(ext), 3.5,
+                    planes=flat_planes(3.0, 3.0))
+        self.assertEqual(p.tab_count, 3)                       # max(3, round(9.4 / 4))
+        centre = np.mean(np.asarray(p.outline[0]), axis=0)
+        for t in p.tabs:
+            self.assertFalse(t.on_straight)
+            # The normal points out from the centre.
+            c = np.array([t.x, t.y]) - centre
+            self.assertGreater(float(np.dot(c / np.linalg.norm(c), [t.nx, t.ny])), 0.98)
 
     def test_flip_swaps_the_sides(self):
         a, b = plan_box(6.0, 4.0, 0.5), plan_box(6.0, 4.0, 0.5, flipped=True)
@@ -231,10 +328,11 @@ class TestPlanRoundTrip(unittest.TestCase):
     def test_applies(self):
         plate = st.custom_rectilinear(1.0, 6.0, 8.0)
         bar = st.custom_cylindrical(1.0, 4.0)
-        self.assertTrue(fx.applies(plate, "mill"))
-        self.assertFalse(fx.applies(plate, "lathe"))
-        self.assertFalse(fx.applies(bar, "mill"))
-        self.assertFalse(fx.applies(plate, "mill", fx.FixtureSettings(enabled=False)))
+        self.assertFalse(fx.applies(plate, "mill"))              # off by default
+        on = fx.FixtureSettings(enabled=True)
+        self.assertTrue(fx.applies(plate, "mill", on))
+        self.assertFalse(fx.applies(plate, "lathe", on))
+        self.assertFalse(fx.applies(bar, "mill", on))
 
     def test_overlay_is_in_the_files_coordinates(self):
         pts, tris = box_mesh(6.0, 4.0, 0.5, origin=(10.0, -3.0, 2.0))
@@ -350,6 +448,60 @@ class TestEstimate(unittest.TestCase):
         p = plan_box(6.0, 4.0, 0.5)
         self.assertIsNone(self.ct.fixture_plan({"fixture": None}))
         self.assertIsNotNone(self.ct.fixture_plan({"fixture": p.to_dict()}))
+
+
+@unittest.skipUnless(HAVE, "needs scipy")
+class TestLayoutEdges(unittest.TestCase):
+    def test_settings_and_plan_helpers(self):
+        s = fx.FixtureSettings(channel_table=((0.5, 0.25), (1.0, 0.375)))
+        self.assertEqual(s.channel_width(3.0), 0.375)          # past the table: its last
+        self.assertEqual(fx.FixtureSettings.from_dict(None), fx.FixtureSettings())
+        flat1 = plan_box(6.0, 4.0, 0.15)
+        self.assertIn("flat, one operation", flat1.summary())
+        self.assertEqual(fx._plain({"a": (np.int64(2), np.float64(np.inf), np.bool_(True))}),
+                         {"a": [2, None, True]})
+        self.assertIsNone(fx.plan_for_results({}, None))
+        self.assertFalse(fx.matches_stock(flat1, st.custom_cylindrical(1, 2)))
+        self.assertFalse(fx.matches_stock(None, fx.grown_stock(flat1)))
+
+    def test_outline_tracing_edges(self):
+        # Two cells touching only at a corner: traced as two loops, not one.
+        grid = fx.Grid(np.zeros(2), np.array([1.0, 1.0]), 0.25)
+        mask = np.zeros(grid.shape, dtype=bool)
+        mask[1, 1] = mask[2, 2] = True
+        loops = fx.loops(grid, mask, tolerance=0.0)
+        self.assertEqual(len(loops), 2)
+        tri = np.array([[0, 0], [1, 0], [0, 1.0]])
+        np.testing.assert_array_equal(fx.simplify(tri, 0.1), tri)
+        closed = np.array([[0, 0], [1, 0], [1, 1.0], [0, 0]])
+        self.assertEqual(len(fx._dp(closed, 0.1)), 4)          # ends coincide: all corners kept
+
+    def test_degenerate_slicing_and_probing(self):
+        pts, tris = box_mesh(2.0, 1.0, 0.5)
+        local = pts / MM
+        self.assertEqual(fx.section_points(local, tris, 5.0, 0.01).shape, (0, 2))
+        sl = fx.Slices(local, tris, 0.0, 0.5)
+        sl.segments[0] = (np.zeros((0, 2)), np.zeros((0, 2)))
+        entry, solid = sl.probe(np.array([[50.0, 50.0]]), np.array([[1.0, 0.0]]), 1.0)
+        self.assertTrue(np.isinf(entry).all())
+        spots = fx._outline_spots([np.array([[0, 0], [0, 0], [2, 0], [2, 1], [0, 1.0]])],
+                                  0.25, 0.2)
+        self.assertTrue(spots)
+
+    def test_nowhere_for_tabs(self):
+        grid = fx.Grid(np.zeros(2), np.ones(2), 0.1)
+        none, notes = fx.place_tabs([np.zeros((3, 2))], grid, np.zeros(grid.shape, bool),
+                                    fx.FixtureSettings(), 0.25, 0.0, 0.5)
+        self.assertEqual(none, [])
+        self.assertIn("no outline", notes[0])
+        tiny = np.array([[0, 0], [0.1, 0], [0.1, 0.1], [0, 0.1]])
+        none, notes = fx.place_tabs([tiny], grid, np.zeros(grid.shape, bool),
+                                    fx.FixtureSettings(), 0.25, 0.0, 0.5)
+        self.assertIn("No room", notes[0])
+
+    def test_a_stock_too_small_for_the_part(self):
+        p = plan_box(6.0, 4.0, 0.5, stock=st.custom_rectilinear(0.25, 3.0, 5.0))
+        self.assertIn("The stock does not enclose the part.", p.warnings)
 
 
 if __name__ == "__main__":

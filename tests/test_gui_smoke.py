@@ -54,7 +54,7 @@ class TestModulesImport(_StubbedQt):
     def test_every_gui_module_imports(self):
         import importlib
 
-        for name in ("partestimator.smt.gui.view3d", "partestimator.smt.gui.panels", "partestimator.smt.gui.worker",
+        for name in ("partestimator.smt.gui.colours", "partestimator.smt.gui.panels", "partestimator.smt.gui.worker",
                      "partestimator.smt.gui.app"):
             with self.subTest(module=name):
                 importlib.import_module(name)
@@ -82,11 +82,6 @@ class TestWidgetsConstruct(_StubbedQt):
         from partestimator.smt.gui.panels import DetailTable
 
         DetailTable()
-
-    def test_view3d(self):
-        from partestimator.smt.gui.view3d import View3D
-
-        View3D()
 
     def test_legend(self):
         from partestimator.smt.gui.app import _Legend
@@ -163,37 +158,6 @@ class TestCallbacksResolve(_StubbedQt):
 
         window = MainWindow()
         window._face_picked(3)
-
-
-class TestViewerHandlesAnEmptyScene(_StubbedQt):
-    """The viewer's own guards, exercised rather than assumed."""
-
-    def test_picking_an_empty_view_returns_nothing(self):
-        from partestimator.smt.gui.view3d import View3D
-
-        self.assertIsNone(View3D().pick(10.0, 10.0))
-
-    def test_clearing_an_empty_view_is_fine(self):
-        from partestimator.smt.gui.view3d import View3D
-
-        view = View3D()
-        view.clear()
-        self.assertFalse(view.has_scene())
-
-    def test_named_views_and_fit_work_with_nothing_loaded(self):
-        from partestimator.smt.gui.view3d import View3D
-
-        view = View3D()
-        for name in ("iso", "top", "front", "right", "bottom", "left", "back"):
-            view.set_view(name)
-        view.fit()
-
-    def test_the_box_can_be_set_and_cleared(self):
-        from partestimator.smt.gui.view3d import View3D
-
-        view = View3D()
-        view.set_box([0, 0, 0], [10, 5, 1], ("10", "5", "1"))
-        view.set_box(None)
 
 
 if __name__ == "__main__":

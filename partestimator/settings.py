@@ -80,7 +80,7 @@ class Settings:
     stock_thickness_pad_in: float = 0.125
     stock_diameter_pad_in: float = 0.125
     # Tabbed fixturing for milled plate parts (geometry/fixture.py).
-    fixture_enabled: bool = True
+    fixture_enabled: bool = False
     tab_height_in: float = 0.060
     tab_width_in: float = 0.250
     tab_spacing_in: float = 4.0

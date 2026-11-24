@@ -58,7 +58,7 @@ from .panels import (
     DetailTable,
     SimpleControls,
 )
-from .view3d import ROLE_COLOURS
+from .colours import ROLE_COLOURS
 from .view3d_vtk import View3D
 from .worker import ExportWorker, OpenWorker, run_in_thread
 
