@@ -34,6 +34,7 @@ import numpy as np
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_QuasiUniformDeflection
+from OCP.GeomAbs import GeomAbs_Line
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS, TopoDS_Shape
@@ -66,14 +67,29 @@ def _is_seam(face_list) -> bool:
     return bool(faces[0].IsSame(faces[1]))
 
 
+# The curved edges again, much finer, for the tabbed-fixturing channel: it is
+# offset from the part's outline, and an arc must come out an arc, not the
+# display's chords (up to MAX_EDGE_DEFLECTION_MM off). About 0.0005".
+OUTLINE_DEFLECTION_MM = 0.0125
+
+
+def extract_outline_edges(shape: TopoDS_Shape) -> list[np.ndarray]:
+    """The shape's curved edges as fine polylines (mm): see
+    OUTLINE_DEFLECTION_MM. Straight edges are left out -- the mesh has
+    those exactly."""
+    return extract_edge_polylines(shape, OUTLINE_DEFLECTION_MM, curved_only=True)
+
+
 def extract_edge_polylines(shape: TopoDS_Shape, deflection_mm: float | None = None,
-                            diagonal_mm: float | None = None) -> list[np.ndarray]:
+                            diagonal_mm: float | None = None,
+                            curved_only: bool = False) -> list[np.ndarray]:
     """Returns a list of (P_i, 3) arrays, each an ordered polyline tracing
     one topological edge of the shape, in world coordinates (mm).
 
-    `deflection_mm` overrides the automatic size-relative tolerance.
-    `diagonal_mm` lets the caller pass an already-computed bounding
-    diagonal to avoid recomputing it.
+    `deflection_mm` overrides the automatic size-relative tolerance (with
+    `curved_only`, it is used as given for every edge, and straight edges
+    are skipped). `diagonal_mm` lets the caller pass an already-computed
+    bounding diagonal to avoid recomputing it.
     """
     if deflection_mm is None:
         if diagonal_mm is None:
@@ -101,12 +117,14 @@ def extract_edge_polylines(shape: TopoDS_Shape, deflection_mm: float | None = No
             continue
         try:
             curve = BRepAdaptor_Curve(edge)
+            if curved_only and curve.GetType() == GeomAbs_Line:
+                continue
 
             # Per-edge tolerance, scaled to this edge's own length so small
             # features stay crisp (see EDGE_RELATIVE_DEFLECTION above).
             edge_deflection = deflection_mm
             try:
-                length = GCPnts_AbscissaPoint.Length_s(curve)
+                length = GCPnts_AbscissaPoint.Length_s(curve) if not curved_only else 0.0
                 if length > 0:
                     edge_deflection = float(np.clip(
                         length * EDGE_RELATIVE_DEFLECTION,

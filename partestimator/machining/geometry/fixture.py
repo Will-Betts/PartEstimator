@@ -342,6 +342,127 @@ def loops(grid: Grid, mask: np.ndarray, tolerance: float | None = None) -> list[
     return [p for p in result if len(p) >= 3]
 
 
+OFFSET_TOL_IN = 0.0005
+
+
+def _polyline_segments(polylines, frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The B-rep edge polylines (mm, file coordinates) as plan-XY segments
+    (inches, before the plan's shift): (starts, ends)."""
+    a, b = [], []
+    for pl in polylines or ():
+        p = np.asarray(pl, dtype=float).reshape(-1, 3)
+        if len(p) < 2:
+            continue
+        xy = (p @ frame.T / MM)[:, :2]
+        a.append(xy[:-1])
+        b.append(xy[1:])
+    if not a:
+        return np.zeros((0, 2)), np.zeros((0, 2))
+    return np.vstack(a), np.vstack(b)
+
+
+def offset_loops(grid: Grid, fmask: np.ndarray, grown: np.ndarray, pts_xy: np.ndarray,
+                 tris: np.ndarray, distance: float, tol: float = OFFSET_TOL_IN,
+                 edges: tuple[np.ndarray, np.ndarray] | None = None) -> list[np.ndarray]:
+    """The outer edge(s) of `grown` (the footprint grown by `distance`), true
+    to the part: the projected outline offset by exactly `distance`.
+
+    The grid only finds the loops. Each traced vertex is then put on the
+    offset curve: from the nearest point q of the projected part, at
+    `distance` along the line through it -- so straight edges offset to
+    straight lines and corners to arcs, with no staircase -- and the result
+    is simplified to within `tol`.
+
+    The part is the projected mesh plus `edges`, the B-rep's own edges as
+    plan-XY segments (starts, ends): sampled much finer than the mesh, so
+    an arc is offset as an arc, not as the mesh's facets.
+    """
+    from scipy import ndimage
+    from scipy.spatial import cKDTree
+
+    raw = [p for p in loops(grid, grown, tolerance=0.0) if signed_area(p) > 0]
+    if not raw or not len(tris):
+        return raw
+    # The edges near the footprint's edge or outside it (a true arc bulges
+    # past the mesh's chords): the only ones a point outside can be nearest
+    # to. Those deep inside are dropped.
+    e = np.sort(np.stack([tris[:, [0, 1, 2]].ravel(), tris[:, [1, 2, 0]].ravel()], 1), 1)
+    e = np.unique(e, axis=0)
+    a, b = pts_xy[e[:, 0]], pts_xy[e[:, 1]]
+    if edges is not None and len(edges[0]):
+        a, b = np.vstack([a, edges[0]]), np.vstack([b, edges[1]])
+    edge_zone = ndimage.distance_transform_edt(fmask) <= 5.0     # within 5 cells of outside
+    keep = grid.contains(edge_zone, a) | grid.contains(edge_zone, b)
+    a, b = a[keep], b[keep]
+    if not len(a):
+        return raw
+    step = grid.cell
+    n = np.maximum(1, np.ceil(np.linalg.norm(b - a, axis=1) / step).astype(int))
+    seg = np.repeat(np.arange(len(a)), n + 1)
+    samples = a[seg] + (b[seg] - a[seg]) * _ramp(n)[:, None]
+    tree = cKDTree(samples)
+    k = min(8, len(samples))
+
+    def nearest(xy):
+        """The nearest point of the projected mesh to each of `xy`, and how far."""
+        _d, idx = tree.query(xy, k=k)
+        idx = np.asarray(idx).reshape(len(xy), -1)
+        best_q = np.zeros_like(xy)
+        best_d = np.full(len(xy), np.inf)
+        for col in range(idx.shape[1]):
+            s = seg[idx[:, col]]
+            sa, ab = a[s], b[s] - a[s]
+            L2 = np.einsum("ij,ij->i", ab, ab)
+            t = np.einsum("ij,ij->i", xy - sa, ab) / np.where(L2 > 0, L2, 1.0)
+            q = sa + ab * np.clip(t, 0.0, 1.0)[:, None]
+            d = np.linalg.norm(xy - q, axis=1)
+            better = d < best_d
+            best_d[better], best_q[better] = d[better], q[better]
+        return best_q, best_d
+
+    def snap(xy):
+        out_ = xy.copy()
+        todo = np.arange(len(xy))
+        # Pushed out from its nearest edge, a point in an inside corner can
+        # still be too close to the other one: push again till it is clear of
+        # both, which brings it to the corner where their offsets meet.
+        for push in range(8):
+            q, d = nearest(out_[todo])
+            if push:                         # again: only those still too close
+                close = d < distance - 1e-7
+                todo, q, d = todo[close], q[close], d[close]
+                if not len(todo):
+                    break
+            ok = d > 1e-9
+            out_[todo[ok]] = q[ok] + (out_[todo[ok]] - q[ok]) * (distance / d[ok])[:, None]
+        return out_
+
+    out = []
+    for loop in raw:
+        pts = snap(loop)
+        # Between two vertices on the curve the straight edge cuts inside it
+        # round an arc, and across an inside corner. Split each edge where
+        # it strays most, if by more than `tol`, the new vertex put back on
+        # the curve, until none does.
+        ts = np.linspace(0.0, 1.0, 10)[1:-1]
+        for _round in range(16):
+            nxt = np.roll(pts, -1, axis=0)
+            probe = pts[:, None, :] + (nxt - pts)[:, None, :] * ts[None, :, None]
+            _q, d = nearest(probe.reshape(-1, 2))
+            err = np.abs(d - distance).reshape(len(pts), len(ts))
+            bad = err.max(axis=1) > tol
+            if not bad.any():
+                break
+            worst = probe[bad, err[bad].argmax(axis=1)]
+            pts = np.insert(pts, np.nonzero(bad)[0] + 1, snap(worst), axis=0)
+        # Drop repeats (two vertices onto one point) before straightening.
+        gap = np.linalg.norm(np.roll(pts, -1, axis=0) - pts, axis=1)
+        pts = pts[gap > 1e-7]
+        if len(pts) >= 3:
+            out.append(simplify(pts, tol))
+    return [p for p in out if len(p) >= 3 and signed_area(p) > 0]
+
+
 def simplify(loop: np.ndarray, tol: float) -> np.ndarray:
     """Douglas-Peucker on a closed loop."""
     pts = np.asarray(loop, dtype=float)
@@ -696,8 +817,11 @@ def plan(points_mm, triangles, rect_axes, rect_extents_mm, stock, part_volume_in
          settings: FixtureSettings | None = None, *, planes=None, holes=None,
          flipped: bool = False, clamp_edge: str = CLAMP_EDGES[0],
          channel_width_in: float | None = None, tab_count: int | None = None,
-         grow_stock: bool = False) -> FixturePlan:
+         grow_stock: bool = False, edge_polylines=None) -> FixturePlan:
     """Lay the part out in `stock` (a plate StockSize) for tabbed fixturing.
+
+    `edge_polylines` (the B-rep edges, (n, 3) mm each, as the analysis has
+    them) make the channel follow arcs exactly rather than the mesh facets.
 
     With `grow_stock` the stock is enlarged (to the next 1/4") wherever the
     frame would be thinner than the minimum, and the plan is for that size.
@@ -783,8 +907,11 @@ def plan(points_mm, triangles, rect_axes, rect_extents_mm, stock, part_volume_in
     # tabs can sit on arcs and angled edges.
     outline = [p + shift[:2] for p in loops(grid, fmask, tolerance=1.5 * grid.cell)]
     outline = [p for p in outline if signed_area(p) > 0]
-    channel = [p + shift[:2] for p in loops(grid, cmask)]
-    channel = [p for p in channel if signed_area(p) > 0]
+    # The channel's outer edge: the part's projected outline offset by the
+    # channel width exactly (lines stay lines, corners become arcs).
+    channel = [p + shift[:2] for p in offset_loops(
+        grid, fmask, cmask, local[:, :2], tris, w,
+        edges=_polyline_segments(edge_polylines, frame))]
     grid.lo = grid.lo + shift[:2]
 
     # Each tab at its own height, where the part's wall is at the outline:
@@ -869,7 +996,8 @@ def plan_for_results(results: dict, stock, settings: FixtureSettings | None = No
     sp = results.get("shape_props")
     vol = sp.volume_mm3 / MM ** 3 if sp is not None else 0.0
     return plan(pts, tris, rect.axes, rect.extents_mm, stock, vol, settings,
-                planes=results.get("planes"), holes=results.get("holes"), **options)
+                planes=results.get("planes"), holes=results.get("holes"),
+                edge_polylines=results.get("outline_edges"), **options)
 
 
 def matches_stock(plan_: FixturePlan | dict | None, stock) -> bool:

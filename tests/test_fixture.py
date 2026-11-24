@@ -175,6 +175,90 @@ class TestLayout(unittest.TestCase):
         self.assertEqual(len(p.outline), 1)
         self.assertLessEqual(len(p.outline[0]), 6)       # a rectangle, straightened
 
+    def test_the_channel_is_the_outline_offset_exactly(self):
+        # An L in plan (an inside corner), and a slanted octagon: the channel's
+        # outer edge is the projected outline grown by the width, not a
+        # staircase off the grid -- every vertex at the width, and the edges
+        # between them within the tolerance.
+        def rect_dist(xy, x0, y0, x1, y1):
+            dx = np.maximum(np.maximum(x0 - xy[:, 0], xy[:, 0] - x1), 0)
+            dy = np.maximum(np.maximum(y0 - xy[:, 1], xy[:, 1] - y1), 0)
+            return np.hypot(dx, dy)
+
+        p1, t1 = box_mesh(4.0, 1.0, 0.5)
+        p2, t2 = box_mesh(1.0, 3.0, 0.5)
+        pts, tris = np.vstack([p1, p2]), np.vstack([t1, t2 + len(p1)])
+        ext = np.array([4.0, 3.0, 0.5]) * MM
+        p = fx.plan(pts, tris, np.eye(3), ext, st.rectilinear_stock(ext), 2.5,
+                    planes=flat_planes(4.0, 3.0), grow_stock=True)
+        w = p.channel_width_in
+        self.assertEqual(len(p.channel), 1)
+        # Back in the part's own coordinates (overlay: the loop at its bottom).
+        loop = fx.overlay(p)[0][0][:, :2] / MM
+        t = np.linspace(0, 1, 9)[:, None]
+        dense = np.vstack([a + (b - a) * t for a, b in zip(loop, np.roll(loop, -1, 0))])
+        for xy, tol in ((loop, 1e-6), (dense, 2 * fx.OFFSET_TOL_IN)):
+            d = np.minimum(rect_dist(xy, 0, 0, 4, 1), rect_dist(xy, 0, 0, 1, 3))
+            self.assertLess(np.abs(d - w).max(), tol)
+        # The inside corner is a sharp corner of the offset, not cut across.
+        self.assertLess(np.linalg.norm(loop - [1 + w, 1 + w], axis=1).min(), 0.002)
+
+        r = 2.0
+        octagon = [(r * math.cos(k * math.pi / 4 + math.pi / 8),
+                    r * math.sin(k * math.pi / 4 + math.pi / 8)) for k in range(8)]
+        pts, tris = prism_mesh(octagon, 0.5)
+        ext = np.array([4.0, 4.0, 0.5]) * MM
+        p = fx.plan(pts, tris, np.eye(3), ext, st.rectilinear_stock(ext), 6.0,
+                    planes=flat_planes(4.0, 4.0), grow_stock=True)
+        xy = fx.overlay(p)[0][0][:, :2] / MM
+        poly = np.asarray(octagon)
+        a, b = poly, np.roll(poly, -1, 0)
+        ab = b - a
+        t = np.clip(np.einsum("nij,ij->ni", xy[:, None, :] - a[None], ab)
+                    / np.einsum("ij,ij->i", ab, ab), 0, 1)
+        d = np.linalg.norm(xy[:, None, :] - (a[None] + t[..., None] * ab[None]), axis=2).min(1)
+        self.assertLess(np.abs(d - p.channel_width_in).max(), 1e-6)
+        # Eight straight sides and eight arcs: few points, no staircase.
+        self.assertLess(len(xy), 120)
+
+    def test_the_channel_follows_the_true_arc_not_the_facets(self):
+        # A round part meshed coarsely (16 facets), with its B-rep edge as a
+        # fine circle: the channel is the circle offset, not the facets'.
+        r = 2.0
+        poly = [(r * math.cos(2 * math.pi * k / 16), r * math.sin(2 * math.pi * k / 16))
+                for k in range(16)]
+        pts, tris = prism_mesh(poly, 0.5)
+        ext = np.array([4.0, 4.0, 0.5]) * MM
+        th = np.linspace(0, 2 * math.pi, 721)
+        circle = np.column_stack([r * np.cos(th), r * np.sin(th), np.zeros_like(th)]) * MM
+
+        def radii(**kw):
+            p = fx.plan(pts, tris, np.eye(3), ext, st.rectilinear_stock(ext), 6.0,
+                        planes=flat_planes(4.0, 4.0), grow_stock=True, **kw)
+            xy = fx.overlay(p)[0][0][:, :2] / MM
+            t = np.linspace(0, 1, 5)[:, None]
+            dense = np.vstack([a + (b - a) * t for a, b in zip(xy, np.roll(xy, -1, 0))])
+            return np.hypot(dense[:, 0], dense[:, 1]) - r, p.channel_width_in
+
+        rad, w = radii(edge_polylines=[circle, circle[:1]])        # a 1-point edge: ignored
+        self.assertLess(np.abs(rad - w).max(), 0.002)
+        rad, w = radii()                                           # the mesh alone: facets
+        self.assertGreater(np.abs(rad - w).max(), 0.01)
+
+    def test_offset_guards(self):
+        a, b = fx._polyline_segments(None, np.eye(3))
+        self.assertEqual((a.shape, b.shape), ((0, 2), (0, 2)))
+        grid = fx.Grid((0, 0), (1, 1), 0.05)
+        mask = np.zeros(grid.shape, dtype=bool)
+        self.assertEqual(fx.offset_loops(grid, mask, mask, np.zeros((0, 2)),
+                                         np.zeros((0, 3), int), 0.25), [])
+        mask[5:15, 5:15] = True
+        got = fx.offset_loops(grid, mask, mask, np.zeros((0, 2)), np.zeros((0, 3), int), 0.25)
+        self.assertEqual(len(got), 1)                              # no mesh: as traced
+        deep = np.array([[0.49, 0.49], [0.51, 0.49], [0.5, 0.51]])
+        got = fx.offset_loops(grid, mask, mask, deep, np.array([[0, 1, 2]]), 0.25)
+        self.assertEqual(len(got), 1)                    # no mesh near the edge: as traced
+
     def test_volumes_add_up(self):
         p = plan_box(6.0, 4.0, 0.5, grow_stock=True)
         part = 12.0
