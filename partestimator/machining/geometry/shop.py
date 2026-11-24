@@ -81,6 +81,7 @@ FRACTION_KEYS = {
     "thin_wall_feed_derate",
     "turn_rough_duty", "turn_finish_duty", "turn_part_sfm_fraction",
     "turn_rapid_fraction", "turn_deburr_fraction", "turn_auto_fraction",
+    "fixture_channel_mrr_fraction",
 }
 
 

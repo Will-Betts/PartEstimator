@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -31,8 +32,10 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QStackedWidget,
     QTabBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -56,11 +59,37 @@ KIND_LABEL = {SHEET: "Sheet metal", MACHINED: "Machined"}
 TAB_NAME = {SHEET: "Sheet Metal", MACHINED: "Machining"}
 
 
+def _inch_spin(value: float, high: float, step: float = 0.125, decimals: int = 3,
+               tip: str = "", suffix: str = " in") -> QDoubleSpinBox:
+    spin = QDoubleSpinBox()
+    spin.setDecimals(decimals)
+    spin.setRange(0.0, high)
+    spin.setSingleStep(step)
+    spin.setSuffix(suffix)
+    spin.setValue(value)
+    spin.setToolTip(tip)
+    return spin
+
+
+def _note(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setStyleSheet("color:#777;")
+    return label
+
+
 class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        form = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        tabs = QTabWidget()
+        outer.addWidget(tabs)
+
+        # -- general ---------------------------------------------------------
+        page = QWidget()
+        form = QFormLayout(page)
+        tabs.addTab(page, "General")
         self.cutoff = QDoubleSpinBox()
         self.cutoff.setDecimals(3)
         self.cutoff.setRange(0.010, 1.000)
@@ -68,13 +97,10 @@ class SettingsDialog(QDialog):
         self.cutoff.setSuffix(" in")
         self.cutoff.setValue(settings.sheet_cutoff_in)
         form.addRow("Flat sheet metal thickness cutoff:", self.cutoff)
-        note = QLabel(
-            "A FLAT part of uniform thickness at or under this is treated as\n"
-            "sheet metal; thicker is machined plate. Bent parts are always\n"
-            "sheet metal."
-        )
-        note.setStyleSheet("color:#777;")
-        form.addRow(note)
+        form.addRow(_note(
+            "A FLAT part of uniform thickness at or under this is treated as "
+            "sheet metal; thicker is machined plate. Bent parts are always "
+            "sheet metal."))
 
         form.addRow(QLabel("<b>Machining stock allowances</b>"))
         self.pads = {}
@@ -89,26 +115,86 @@ class SettingsDialog(QDialog):
                                                        "bar) for cleanup."),
         )
         for key, label, tip in rows:
-            spin = QDoubleSpinBox()
-            spin.setDecimals(3)
-            spin.setRange(0.0, MAX_PAD_IN)
-            spin.setSingleStep(0.125)
-            spin.setSuffix(" in")
-            spin.setValue(getattr(settings, key))
-            spin.setToolTip(tip)
+            spin = _inch_spin(getattr(settings, key), MAX_PAD_IN, tip=tip)
             form.addRow(label, spin)
             self.pads[key] = spin
-        pad_note = QLabel(
-            "The recommended stock is the part plus these, rounded up to the\n"
-            "next 1/4 in. Sheet (0.190 in thick or under) is used as-is.\n"
-            f"All saved to {SETTINGS_PATH.name} beside the launcher."
-        )
-        pad_note.setStyleSheet("color:#777;")
-        form.addRow(pad_note)
+        form.addRow(_note(
+            "The recommended stock is the part plus these, rounded up to the "
+            "next 1/4 in. Sheet (0.190 in thick or under) is used as-is."))
+
+        # -- tabbed fixturing ------------------------------------------------
+        page = QWidget()
+        form = QFormLayout(page)
+        tabs.addTab(page, "Tabbed fixturing")
+        self.fixture_enabled = QCheckBox("Tab milled plate parts by default")
+        self.fixture_enabled.setChecked(settings.fixture_enabled)
+        self.fixture_enabled.setToolTip(
+            "Each part can still be taken off tabs in Part Inputs > Fixturing.")
+        form.addRow(self.fixture_enabled)
+        form.addRow(_note(
+            "The part is cut out of its plate with a channel round its outline, held "
+            "to the frame of left-over stock by tabs. Thick enough plate stands on "
+            "one edge in a 5-axis vise and is done in one operation, turned 180 "
+            "degrees between sides; thinner or taller plate lies flat for two "
+            "operations, the second facing the floor off."))
+        self.fx = {}
+
+        def add(key, label, high, step=0.125, decimals=3, tip="", suffix=" in"):
+            spin = _inch_spin(getattr(settings, key), high, step, decimals, tip, suffix)
+            form.addRow(label, spin)
+            self.fx[key] = spin
+
+        form.addRow(QLabel("<b>Tabs</b>"))
+        add("tab_height_in", "Tab height:", 1.0, 0.010,
+            tip="Through the thickness: centred when standing in the vise, from the "
+                "part's bottom when flat.")
+        add("tab_width_in", "Tab width:", 2.0, 0.0625, tip="Along the part's edge.")
+        add("tab_spacing_in", "One tab per:", 100.0, 0.5, decimals=2,
+            tip="Of outline. Tabs go on straight edges, away from corners and arcs.")
+        self.min_tabs = QSpinBox()
+        self.min_tabs.setRange(1, 50)
+        self.min_tabs.setValue(int(settings.min_tabs))
+        form.addRow("At least:", self.min_tabs)
+
+        form.addRow(QLabel("<b>Channel width (the profiling cutter)</b>"))
+        add("channel_depth_1_in", "Cut from one side up to:", 12.0, 0.125,
+            tip="Standing in the vise each side cuts half the thickness; flat, the "
+                "whole thickness.")
+        add("channel_width_1_in", "    width:", 2.0, 0.0625)
+        add("channel_depth_2_in", "Up to:", 12.0, 0.125)
+        add("channel_width_2_in", "    width:", 2.0, 0.0625)
+        add("channel_width_3_in", "Deeper:", 2.0, 0.0625)
+
+        form.addRow(QLabel("<b>Stock and vise</b>"))
+        add("min_frame_in", "Frame outside the channel, at least:", 6.0,
+            tip="The recommended plate grows (to the next 1/4 in) where it would be "
+                "thinner.")
+        add("vise_grip_in", "Vise grip on the clamped edge:", 3.0, 0.0625)
+        add("vise_clearance_in", "Clearance above the jaws:", 6.0, 0.0625,
+            tip="So the holder clears the vise; the clamped edge grows by grip plus "
+                "clearance beyond the frame.")
+        add("vertical_min_thickness_in", "Stand on edge from:", 12.0, 0.0625,
+            tip="Thinner plate lies flat for two operations.")
+        add("max_stickout_ratio", "Stick-out above the jaws, at most:", 100.0, 0.5,
+            decimals=1, suffix=" x thickness",
+            tip="A blank sticking out further than this lies flat instead: tall, thin "
+                "plate chatters on edge.")
+
+        outer.addWidget(_note(f"All saved to {SETTINGS_PATH.name} beside the launcher."))
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
+        outer.addWidget(buttons)
+
+    def apply_to(self, settings: Settings) -> None:
+        """Copy what was entered into `settings`."""
+        settings.sheet_cutoff_in = float(self.cutoff.value())
+        for key, spin in {**self.pads, **self.fx}.items():
+            setattr(settings, key, float(spin.value()))
+        settings.min_tabs = int(self.min_tabs.value())
+        settings.fixture_enabled = self.fixture_enabled.isChecked()
+        if settings.channel_depth_2_in <= settings.channel_depth_1_in:
+            settings.channel_depth_2_in = settings.channel_depth_1_in + 0.125
 
 
 class UnifiedWindow(QMainWindow):
@@ -397,15 +483,13 @@ class UnifiedWindow(QMainWindow):
         if dlg.exec() != QDialog.Accepted:
             return
         old_cutoff = self.settings.sheet_cutoff_in
-        old_pads = self.settings.stock_allowances()
-        self.settings.sheet_cutoff_in = float(dlg.cutoff.value())
-        for key, spin in dlg.pads.items():
-            setattr(self.settings, key, float(spin.value()))
+        old = (self.settings.stock_allowances(), self.settings.fixture())
+        dlg.apply_to(self.settings)
         try:
             self.settings.save()
         except OSError as exc:
             QMessageBox.warning(self, "Settings", f"Could not save settings: {exc}")
-        if self.settings.stock_allowances() != old_pads:
+        if (self.settings.stock_allowances(), self.settings.fixture()) != old:
             self.settings.apply()
             self.mach.refresh_stock_allowances()
         if (self.path is not None and self._future is None

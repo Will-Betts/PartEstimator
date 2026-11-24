@@ -34,9 +34,10 @@ from PySide6.QtWidgets import (
 
 from partestimator.machining.geometry import cycle_time, derived, export, features, materials, rates, shop, step_io
 from partestimator.machining import tuning
-from partestimator.machining.geometry import orientation
+from partestimator.machining.geometry import fixture, orientation
 from partestimator.machining.geometry import stock as stock_mod
 from partestimator.machining.geometry.materials import MATERIALS
+from partestimator.machining.ui.fixture_panel import FixtureControls
 from partestimator.machining.ui.proc_workers import AnalysisRunner
 from partestimator.machining.ui.stock_panel import StockControls
 from partestimator.machining.ui.viewer import PartViewer, stock_box_extents
@@ -76,6 +77,11 @@ class MainWindow(QMainWindow):
         # Re-measures the turned profile when the bar is set another way round.
         self._turn_runner = None
         self._auto_turning = None
+        self._fixture_runner = None
+        self._fixture_cache: dict = {}
+        self._ops_before_fixture: int | None = None
+        self._ops_auto = None       # (procedure, operations) last suggested
+        self._ops_set = None        # the value suggested
 
         # Loaded once. A missing or malformed rate file must not stop the
         # geometry side of the app from working, so this degrades to
@@ -212,9 +218,136 @@ class MainWindow(QMainWindow):
         return {**self.ANALYSIS_OPTIONS, "stock_allowances": stock_mod.allowances()}
 
     def refresh_stock_allowances(self) -> None:
-        """The stock allowances changed (Settings...): resize the open part's
-        stock if it was sized by the rules."""
+        """The stock allowances or the fixturing standard changed
+        (Settings...): resize the open part's stock if it was sized by the
+        rules, and lay its tabs out again."""
+        self._fixture_cache.clear()
+        if not self.results:
+            return
         self.stock_controls.refresh_allowances()
+        self._on_fixture_input()
+
+    # ------------------------------------------------------------ fixturing
+    def _fixture_options(self) -> dict:
+        return self.fixture_controls.options()
+
+    def _fixture_plan(self, stock, rect=None, grow: bool = False):
+        """The plan for this stock (cached: the stock panel asks often)."""
+        rect = rect if rect is not None else self.results.get("rect_box")
+        opts = self._fixture_options()
+        key = (id(rect), grow, None if grow else (stock.thickness_or_diameter_in,
+                                                    stock.width_in, stock.length_in),
+               tuple(sorted(opts.items())), repr(fixture.standard()))
+        if key not in self._fixture_cache:
+            res = dict(self.results)
+            res["rect_box"] = rect
+            try:
+                self._fixture_cache[key] = fixture.plan_for_results(
+                    res, stock, grow_stock=grow, **opts)
+            except Exception as exc:  # noqa: BLE001 -- never let it break the window
+                self.statusBar().showMessage(f"Tab layout failed: {exc}", 8000)
+                self._fixture_cache[key] = None
+        return self._fixture_cache[key]
+
+    def _fixture_reason(self, stock) -> str:
+        """Why tabs cannot apply to this part at all, or "" when they can
+        (whether they are wanted is the Fixturing checkbox)."""
+        if self._current_removal_type() != "mill":
+            return "Lathe work is not tabbed."
+        if stock is None or stock.kind != "rectilinear":
+            return "Only plate stock is tabbed, not bar or extrusion."
+        return ""
+
+    def _recommended_plate(self, rect):
+        """The stock panel's recommended plate: grown so a frame stands
+        outside the channel when the part is tabbed."""
+        if (not self.results or not self.fixture_controls.wanted()
+                or self._current_removal_type() != "mill"):
+            return None
+        plan = self._fixture_plan(stock_mod.rectilinear_stock(rect.extents_mm), rect, grow=True)
+        return fixture.grown_stock(plan) if plan is not None else None
+
+    def _update_fixture(self) -> None:
+        """Lay the tabs out for the current stock, or take them away. The
+        Fixturing section shows only for parts tabs can apply to."""
+        stock = self.results.get("stock")
+        why = self._fixture_reason(stock)
+        plan = self._fixture_plan(stock) if not why and self.fixture_controls.wanted() else None
+        self.results["fixture"] = plan
+        self.fixture_title.setVisible(not why)
+        self.fixture_controls.setVisible(not why)
+        self.fixture_controls.show_plan(plan, why)
+        # The procedure suggests the setups -- one standing in the vise, two
+        # flat -- when the part becomes tabbed or its procedure changes. The
+        # count stays editable, and what is typed stands until then.
+        ops = self.operations_spin
+        auto = (plan.procedure, plan.operations) if plan is not None else None
+        if auto != self._ops_auto:
+            if self._ops_auto is None:
+                self._ops_before_fixture = ops.value()
+            ops.blockSignals(True)
+            if plan is not None:
+                ops.setValue(plan.operations)
+            elif self._ops_before_fixture is not None and ops.value() == self._ops_set:
+                ops.setValue(self._ops_before_fixture)      # untouched: put it back
+            ops.blockSignals(False)
+            self._ops_auto = auto
+            self._ops_set = ops.value() if plan is not None else None
+
+    def _on_fixture_input(self) -> None:
+        """Tabs on or off, sides flipped, another clamping edge, or the
+        process changed: the recommended plate may change size with it."""
+        if not self.results:
+            return
+        stock = self.results.get("stock")
+        if stock is not None and stock.kind == "rectilinear":
+            self.stock_controls.refresh_allowances()     # -> _on_stock_changed
+            return
+        self._update_fixture()
+        self._refresh_cycle_time()
+        self._draw_overlays(fit=False)
+
+    def export_fixture(self) -> None:
+        """Write the stock, in-process and tabbed bodies to a STEP file."""
+        plan = (self.results or {}).get("fixture")
+        if plan is None or not self._current_path:
+            return
+        src = Path(self._current_path)
+        out, _filter = QFileDialog.getSaveFileName(
+            self, "Export fixture STEP", str(src.with_name(f"{src.stem}_fixture.step")),
+            "STEP files (*.step *.stp)")
+        if not out:
+            return
+        if self._fixture_runner is not None:
+            self._fixture_runner.cancel()
+        runner = AnalysisRunner(self)
+        runner.progress.connect(self.statusBar().showMessage)
+        runner.finished.connect(self._on_fixture_exported)
+        runner.failed.connect(lambda title, msg: QMessageBox.warning(
+            self, "Export fixture STEP", f"{title}\n\n{msg.splitlines()[0] if msg else ''}"))
+        runner.done.connect(lambda r=runner: self._on_fixture_done(r))
+        self._fixture_runner = runner
+        self.fixture_controls.btn_export.setEnabled(False)
+        runner.start_fixture_export(str(src), plan.to_dict(), out)
+
+    def _on_fixture_exported(self, result: dict) -> None:
+        names = ", ".join(result.get("volumes_in3", {}))
+        problems = result.get("problems") or []
+        text = f"Wrote {Path(result['path']).name}: {names}."
+        if problems:
+            text += "\n\n" + "\n".join("⚠ " + p for p in problems)
+        self.statusBar().showMessage(text.splitlines()[0], 10000)
+        if problems:
+            QMessageBox.warning(self, "Export fixture STEP", text)
+
+    def _on_fixture_done(self, runner) -> None:
+        if self._fixture_runner is runner:
+            self._fixture_runner = None
+        self.fixture_controls.btn_export.setEnabled(
+            (self.results or {}).get("fixture") is not None)
+
+    def fixture_busy(self) -> bool:
+        return self._fixture_runner is not None
 
     def _build_display_row(self) -> QHBoxLayout:
         """Only the overlays worth toggling. Model edges are always on and
@@ -281,7 +414,7 @@ class MainWindow(QMainWindow):
         self.removal_combo = QComboBox()
         self.removal_combo.addItems(["Mill", "Lathe"])
         self.removal_combo.setToolTip(REMOVAL_TIP)
-        self.removal_combo.currentTextChanged.connect(lambda _t: self._refresh_cycle_time())
+        self.removal_combo.currentTextChanged.connect(lambda _t: self._on_fixture_input())
         layout.addRow("Removal type:", self.removal_combo)
 
         finish_row = QHBoxLayout()
@@ -323,7 +456,9 @@ class MainWindow(QMainWindow):
         self.operations_spin.setValue(1)
         self.operations_spin.setToolTip(
             "Machine operations (setups) per part.\n"
-            "Tool changes and load/unload repeat per setup.")
+            "Tool changes and load/unload repeat per setup.\n"
+            "A tabbed part starts at its procedure's count (one standing in the\n"
+            "vise, two flat); change it here if the part needs more.")
         self.operations_spin.valueChanged.connect(lambda _v: self._refresh_cycle_time())
         layout.addRow("Operations:", self.operations_spin)
 
@@ -356,6 +491,15 @@ class MainWindow(QMainWindow):
         self.stock_controls.orient_dialog.closed.connect(
             lambda: self.viewer.clear_highlights())
         layout.addRow(self.stock_controls)
+        self.stock_controls.recommend_plate = self._recommended_plate
+
+        self.fixture_title = QLabel("Fixturing")
+        self.fixture_title.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        layout.addRow(self.fixture_title)
+        self.fixture_controls = FixtureControls()
+        self.fixture_controls.changed.connect(self._on_fixture_input)
+        self.fixture_controls.exportRequested.connect(self.export_fixture)
+        layout.addRow(self.fixture_controls)
 
         self.left_layout.addWidget(box)
 
@@ -820,7 +964,8 @@ class MainWindow(QMainWindow):
         """Terminates the worker process outright. Because the work is in a
         separate process this interrupts even an OCCT call that would
         otherwise ignore Python entirely."""
-        for runner in (self._runner, self._thin_runner, self._turn_runner):
+        for runner in (self._runner, self._thin_runner, self._turn_runner,
+                       self._fixture_runner):
             if runner is not None:
                 runner.cancel()
         self.statusBar().showMessage("Cancelled.")
@@ -905,6 +1050,10 @@ class MainWindow(QMainWindow):
         self.tapped_spin.blockSignals(True)
         self.tapped_spin.setValue(-1)
         self.tapped_spin.blockSignals(False)
+        self._fixture_cache.clear()
+        self.fixture_controls.reset()
+        if self._ops_auto is not None:
+            self._ops_auto = ("new part",)      # suggest its procedure's count afresh
         sp = results.get("shape_props")
         stock = self.stock_controls.set_part(
             results.get("rect_box"), results.get("cylinder"), results.get("primary"),
@@ -915,6 +1064,7 @@ class MainWindow(QMainWindow):
             extrusion=results.get("extrusion"))
         if stock is not None:
             results["stock"] = stock
+        self._update_fixture()
         self.lbl_thin_wall.setText("")
 
         self.viewer.display_part(
@@ -980,7 +1130,8 @@ class MainWindow(QMainWindow):
         """Shut down cleanly: let any running worker thread finish and close
         the VTK render window, otherwise PyVista/VTK can emit errors or hang
         on exit."""
-        for runner in (self._runner, self._thin_runner, self._turn_runner):
+        for runner in (self._runner, self._thin_runner, self._turn_runner,
+                       self._fixture_runner):
             if runner is not None:
                 try:
                     runner.cancel()
@@ -1155,6 +1306,9 @@ class MainWindow(QMainWindow):
 
         if self.chk_show_stock.isChecked():
             self.viewer.show_stock(primary, self.results.get("stock"), rect_box, cyl)
+            plan = self.results.get("fixture")
+            if plan is not None:
+                self.viewer.show_fixture(*fixture.overlay(plan))
 
         if self.chk_show_captured.isChecked():
             self.viewer.show_captured_hole_axes(self.results.get("holes") or [])
@@ -1233,6 +1387,7 @@ class MainWindow(QMainWindow):
             unit = self.display_unit
             self._refresh_bounding_box_labels(
                 unit, "mm" if unit == "MM" else "in", "mm³" if unit == "MM" else "in³")
+        self._update_fixture()
         self._refresh_feature_table()
         self._refresh_weight_labels()
         self._refresh_stock_labels()

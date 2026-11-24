@@ -42,6 +42,7 @@ COM_COLOR = (0.90, 0.55, 0.05)  # amber center-of-mass marker
 PICK_COLOR = (0.10, 0.75, 0.35)  # green: a face picked to set the orientation
 CLICK_TOLERANCE_PX = 4           # further than this is a drag, not a click
 CAPTURED_AXIS_COLOR = (0.90, 0.08, 0.08)  # red axis through captured holes
+FIXTURE_COLOR = "#e8892f"     # tabbed fixturing: channel edge and tabs
 CAPTURED_AXIS_WIDTH = 3.0
 # How far the axis line pokes out past each end of the hole, as a fraction
 # of the hole depth -- enough to be seen emerging from the part.
@@ -610,6 +611,39 @@ class PartViewer:
             lighting=False,
         ))
         self._overlay_actors.append(actor)
+
+    def show_fixture(self, loops_mm, tab_corners_mm):
+        """Tabbed fixturing: the channel's outer edge as closed lines
+        (`loops_mm`, each an (n, 3) array) and each tab as a solid block
+        (`tab_corners_mm`, each the (8, 3) corners: four at the bottom
+        counter-clockwise, then the four above them)."""
+        points, lines = [], []
+        for loop in loops_mm:
+            loop = np.asarray(loop, dtype=float)
+            if len(loop) < 2:
+                continue
+            i = len(points)
+            points.extend(loop)
+            lines.extend([len(loop) + 1, *range(i, i + len(loop)), i])
+        if points:
+            poly = _line_polydata(np.asarray(points, dtype=float),
+                                  np.array(lines, dtype=np.int64))
+            actor = _style_line_actor(self.plotter.add_mesh(
+                poly, color=FIXTURE_COLOR, line_width=2.0, lighting=False))
+            self._overlay_actors.append(actor)
+        if tab_corners_mm:
+            verts, faces = [], []
+            quads = ((0, 1, 2, 3), (4, 7, 6, 5), (0, 4, 5, 1), (1, 5, 6, 2),
+                     (2, 6, 7, 3), (3, 7, 4, 0))
+            for corners in tab_corners_mm:
+                base = len(verts)
+                verts.extend(np.asarray(corners, dtype=float))
+                for q in quads:
+                    faces.extend([4, *(base + k for k in q)])
+            mesh = pv.PolyData(np.asarray(verts, dtype=float),
+                               np.array(faces, dtype=np.int64))
+            actor = self.plotter.add_mesh(mesh, color=FIXTURE_COLOR, opacity=0.9)
+            self._overlay_actors.append(actor)
 
     def show_thin_wall_points(self, points_mm: np.ndarray):
         """Highlights the sample points flagged by the thin-wall scan as

@@ -69,3 +69,6 @@ turn_rapid_fraction,0.10,fraction,"Rapids and approach as a share of turning cut
 lathe_load_unload_min,0.35,min,"Load and unload on the lathe. With a bar feeder this is mostly the part catcher and a bar change spread over the bar; chucking a blank by hand is nearer the mill figure."
 turn_deburr_fraction,0.30,fraction,"Share of the convex edge length still hand-deburred on a turned part. Turned edges usually get a programmed chamfer or break in the finishing pass."
 turn_auto_fraction,0.50,fraction,"Turned area fraction at or above which a round-stock part opens as Lathe. Below it, Mill."
+fixture_channel_mrr_fraction,0.35,fraction,"Tabbed fixturing: the channel round the part is slotted with a small cutter (the channel width), so it comes out at this fraction of the open roughing rate."
+tab_breakoff_s,45,s,"Tabbed fixturing: breaking one tab out and filing its nub flush, by hand. Charged per tab, as hand work in door-to-door."
+fixture_turn_s,15,s,"Tabbed fixturing, vertical procedure: turning the blank 180 degrees in the vise between side 1 and side 2 (an index on a 3+2 machine)."
