@@ -454,6 +454,11 @@ at the end.
   Sheet bought at the part's thickness has no floor,
   so it is one operation with the channel cut through (on a spoilboard).
 
+The channel's outer edge is the part's outline seen from above, offset by the
+channel width: straight edges stay straight, arcs stay true arcs (from the
+part's own curved edges, not the display mesh), and outside corners are
+rounded at the channel width. It is within 0.0005" of the exact offset.
+
 The part is centred in its stock. The recommended plate grows, to the next
 1/4", wherever it has to so a frame of at least the set width stands outside
 the channel; standing in the vise, the clamped edge also gets the vise's grip

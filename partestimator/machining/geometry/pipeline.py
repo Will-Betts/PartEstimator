@@ -123,6 +123,8 @@ def compute_analysis(path: str, options: dict | None = None, progress=None,
     with stage("Edge extract", "Extracting edges…"):
         edge_polylines = (edges.extract_edge_polylines(shape, diagonal_mm=diagonal)
                           if opt["edges"] else [])
+        # Finer, for the tabbed-fixturing channel round the part's outline.
+        outline_edges = edges.extract_outline_edges(shape)
 
     with stage("Mass props", "Computing mass properties…"):
         shape_props = properties.compute_shape_properties(shape)
@@ -223,6 +225,7 @@ def compute_analysis(path: str, options: dict | None = None, progress=None,
         "render_points": render_points,
         "render_triangles": render_triangles,
         "edge_polylines": edge_polylines,
+        "outline_edges": outline_edges,
         "shape_props": shape_props,
         "rect_box": rect_box,
         "cylinder": cyl,
