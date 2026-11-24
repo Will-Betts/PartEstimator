@@ -146,8 +146,8 @@ class SettingsDialog(QDialog):
 
         form.addRow(QLabel("<b>Tabs</b>"))
         add("tab_height_in", "Tab height:", 1.0, 0.010,
-            tip="Through the thickness: centred when standing in the vise, from the "
-                "part's bottom when flat.")
+            tip="Through the thickness. Each tab is centred where the part's wall "
+                "reaches the outline at its spot.")
         add("tab_width_in", "Tab width:", 2.0, 0.0625, tip="Along the part's edge.")
         add("tab_spacing_in", "One tab per:", 100.0, 0.5, decimals=2,
             tip="Of outline. Tabs go on straight edges, away from corners and arcs.")

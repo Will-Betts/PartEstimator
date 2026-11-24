@@ -6,14 +6,16 @@ from pathlib import Path
 
 from ..diag import LOGGER, name_only
 
-from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing
+from OCP.BRep import BRep_Tool
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
+from OCP.BRepLib import BRepLib
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.Interface import Interface_Static
 from OCP.STEPControl import STEPControl_AsIs, STEPControl_Reader, STEPControl_Writer
-from OCP.TopAbs import TopAbs_SOLID
+from OCP.TopAbs import TopAbs_SHELL, TopAbs_SOLID
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape
@@ -66,6 +68,20 @@ def load_step(path: str | Path) -> TopoDS_Shape:
         sew.Perform()
         shape = sew.SewedShape()
         TopExp.MapShapes_s(shape, TopAbs_SOLID, solids)
+        # Sewing gives back SHELLS, never solids: a closed one has to be made
+        # into a solid explicitly, or a perfectly good surface export is
+        # refused below as having no body.
+        shells = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(shape, TopAbs_SHELL, shells)
+        for i in range(1, shells.Extent() + 1):
+            shell = TopoDS.Shell_s(shells.FindKey(i))
+            if solids.Extent() or not BRep_Tool.IsClosed_s(shell):
+                continue
+            made = BRepBuilderAPI_MakeSolid(shell)
+            if made.IsDone():
+                solid = made.Solid()
+                BRepLib.OrientClosedSolid_s(solid)      # outward normals
+                solids.Add(solid)
         if solids.Extent() == 0:
             raise LoadError(
                 f"{path.name} contains no solid body. Sheet metal recognition needs "

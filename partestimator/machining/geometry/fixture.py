@@ -65,7 +65,7 @@ GRID_CELLS = 1000
 class FixtureSettings:
     """The shop standard. Defaults are the shipped ones; Settings... holds
     the shop's own (settings.json)."""
-    enabled: bool = True
+    enabled: bool = False          # tab new parts by default
     tab_height_in: float = 0.060
     tab_width_in: float = 0.250
     tab_spacing_in: float = 4.0
@@ -124,17 +124,20 @@ class Tab:
     y: float
     nx: float           # outward normal of the outline there
     ny: float
-    length: float       # from TAB_OVERLAP inside the part, across the channel
+    length: float       # from the part's surface (+ overlap), across the channel
     width: float
     z0: float
     z1: float
     on_straight: bool = True
+    # How far in from the outline the part's surface is at the tab: the tab
+    # reaches in to it (zero where the wall is at the outline).
+    inset: float = 0.0
 
     def corners(self) -> np.ndarray:
         """The tab's footprint, four (x, y) corners, counter-clockwise."""
         n = np.array([self.nx, self.ny])
         t = np.array([-self.ny, self.nx])
-        c = np.array([self.x, self.y]) - n * TAB_OVERLAP_IN
+        c = np.array([self.x, self.y]) - n * (self.inset + TAB_OVERLAP_IN)
         h = t * self.width / 2.0
         return np.array([c - h, c - h + n * self.length, c + h + n * self.length, c + h])
 
@@ -202,6 +205,8 @@ def _plain(v):
         return None if math.isinf(f) else f
     if isinstance(v, np.integer):
         return int(v)
+    if isinstance(v, np.bool_):
+        return bool(v)
     return v
 
 
@@ -413,105 +418,230 @@ def section_points(pts: np.ndarray, tris: np.ndarray, z: float, step: float) -> 
     return a[idx] + (b[idx] - a[idx]) * _ramp(n)[:, None]
 
 
-def place_tabs(outline: list[np.ndarray], grid: Grid, channel_mask: np.ndarray,
-               s: FixtureSettings, width_in: float, z0: float, z1: float,
-               count: int | None = None, section=None) -> tuple[list[Tab], list[str]]:
-    """Tabs spread evenly round the outer outline and slid onto straight
-    edges, away from corners and arcs. Each must reach across the channel
-    to the frame, and -- given `section`, the part's cross-section at the
-    tabs' height as points -- land on the part's wall at that height."""
-    notes = []
-    tree = None
-    if section is not None and len(section):
-        from scipy.spatial import cKDTree
+#: A tab's end must sit in at least this much solid part (along the tab),
+#: so it never ends in a hole, a pocket or a groove (inches).
+MIN_SOLID_IN = 0.040
+#: Heights at which the wall counts as reaching the outline (inches).
+TOUCH_TOL_IN = 0.030
+#: How far in from the outline a tab may reach to find the part's surface.
+MAX_INSET_IN = 0.50
+#: Weight of a tab's reach inward against its distance from the even
+#: spacing round the outline: 1" of reach costs as much as this much arc.
+INSET_COST = 8.0
+#: Outline turns sharper than this make a corner, which tabs keep clear of.
+CORNER_DEG = 30.0
 
-        tree = cKDTree(section)
+
+class Slices:
+    """The part's cross-sections at a stack of heights (plan inches), with
+    rays cast in from the channel to find where a tab meets the part."""
+
+    def __init__(self, pts: np.ndarray, tris: np.ndarray, z_lo: float, z_hi: float):
+        h = max(z_hi - z_lo, 1e-6)
+        n = int(np.clip(np.ceil(h / 0.03), 8, 40))
+        # Mid-cells, nudged so no slice lands exactly on a vertex level.
+        self.z = z_lo + (np.arange(n) + 0.5) * h / n + h * 1e-5
+        self.dz = h / n
+        p = pts[tris]                                        # (t, 3, 3)
+        self.segments = []
+        for z in self.z:
+            d = p[:, :, 2] - z
+            cut = []
+            for i, j in ((0, 1), (1, 2), (2, 0)):
+                da, db = d[:, i], d[:, j]
+                cross = (da * db) < 0
+                t = np.where(cross, da / np.where(cross, da - db, 1.0), 0.0)
+                cut.append((cross, p[:, i, :2] + (p[:, j, :2] - p[:, i, :2]) * t[:, None]))
+            hits = np.stack([c for c, _x in cut], axis=1)
+            xy = np.stack([x for _c, x in cut], axis=1)
+            two = hits.sum(axis=1) == 2
+            first = np.argmax(hits[two], axis=1)
+            second = 2 - np.argmax(hits[two][:, ::-1], axis=1)
+            rows = np.nonzero(two)[0]
+            self.segments.append((xy[rows, first], xy[rows, second]))
+
+    def probe(self, origins: np.ndarray, dirs: np.ndarray, reach: float):
+        """For rays from `origins` (outside the part) along `dirs`: (entry,
+        solid), each (slices, rays) -- the distance to the first surface
+        and how much solid follows it; inf where nothing is met."""
+        k = len(origins)
+        entry = np.full((len(self.z), k), np.inf)
+        solid = np.zeros((len(self.z), k))
+        lo, hi = origins.min(axis=0) - reach, origins.max(axis=0) + reach
+        for s_i, (a, b) in enumerate(self.segments):
+            if not len(a):
+                continue
+            keep = ((np.maximum(a, b) >= lo) & (np.minimum(a, b) <= hi)).all(axis=1)
+            a, b = a[keep], b[keep]
+            if not len(a):
+                continue
+            e = b - a                                          # (m, 2)
+            denom = dirs[:, 0:1] * e[None, :, 1] - dirs[:, 1:2] * e[None, :, 0]
+            w = a[None, :, :] - origins[:, None, :]            # (k, m, 2)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                t = (w[:, :, 0] * e[None, :, 1] - w[:, :, 1] * e[None, :, 0]) / denom
+                u = (w[:, :, 0] * dirs[:, 1:2] - w[:, :, 1] * dirs[:, 0:1]) / denom
+            ok = (np.abs(denom) > 1e-12) & (u >= 0) & (u < 1) & (t > 0) & (t <= reach)
+            t = np.where(ok, t, np.inf)
+            t.sort(axis=1)
+            entry[s_i] = t[:, 0]
+            exit_ = t[:, 1] if t.shape[1] > 1 else np.full(k, np.inf)
+            # Nothing past the entry within reach: solid at least to the end.
+            # (No entry at all: no solid; `entry` is inf there anyway.)
+            hit = np.isfinite(t[:, 0])
+            last = np.where(np.isfinite(exit_), exit_, reach)
+            solid[s_i] = np.where(hit, last - np.where(hit, t[:, 0], 0.0), 0.0)
+        return entry, solid
+
+
+def _outline_spots(loops_, step: float, keep_clear: float):
+    """Candidate tab spots along the outline, `step` apart: (arc position,
+    point, outward normal, whether on a straight stretch), clear of sharp
+    corners by `keep_clear`."""
+    spots, arc0 = [], 0.0
+    for loop in loops_:
+        n = len(loop)
+        seg = np.roll(loop, -1, axis=0) - loop
+        lens = np.linalg.norm(seg, axis=1)
+        dirs = seg / np.where(lens > 0, lens, 1.0)[:, None]
+        turn = np.degrees(np.arccos(np.clip(
+            np.einsum("ij,ij->i", dirs, np.roll(dirs, 1, axis=0)), -1.0, 1.0)))
+        corner = turn > CORNER_DEG                       # at the START of segment k
+        starts = arc0 + np.concatenate([[0.0], np.cumsum(lens)[:-1]])
+        corners = [starts[k] for k in range(n) if corner[k]]
+        total = float(lens.sum())
+        for k in range(n):
+            if lens[k] <= 0:
+                continue
+            m = max(1, int(np.floor(lens[k] / step)))
+            for u in (np.arange(m) + 0.5) * lens[k] / m:
+                arc = starts[k] + u
+                near = min((min(abs(arc - c), total - abs(arc - c)) for c in corners),
+                           default=np.inf)
+                if near < keep_clear:
+                    continue
+                d = dirs[k]
+                # On a curve, the normal of the arc around the spot rather than
+                # of one short chord.
+                if not (corner[k] or corner[(k + 1) % n]):
+                    d = dirs[k] + 0.5 * (dirs[k - 1] + dirs[(k + 1) % n])
+                    d = d / (np.linalg.norm(d) or 1.0)
+                straight = bool(lens[k] >= 2 * keep_clear)
+                spots.append((float(arc), loop[k] + dirs[k] * u,
+                              np.array([d[1], -d[0]]), straight))
+        arc0 += total
+    return spots
+
+
+def place_tabs(outline: list[np.ndarray], grid: Grid, channel_mask: np.ndarray,
+               s: FixtureSettings, width_in: float, z_lo: float, z_hi: float,
+               count: int | None = None, slices: Slices | None = None
+               ) -> tuple[list[Tab], list[str]]:
+    """Tabs spread evenly round the outer outline, each where it can join
+    the part well.
+
+    At every candidate spot the part is probed from the channel, at a
+    stack of heights and across the tab's width: how far in its surface is
+    and how much solid lies behind it. A tab goes at the middle of the
+    longest stretch of height where the wall reaches the outline -- on a
+    contoured edge, wherever the part is widest -- or, where it never
+    quite does, at the nearest surface, reaching in to it. Its end must sit
+    in solid part, never in a hole or a pocket. Spots needing less reach
+    are preferred, and corners are kept clear.
+    """
+    notes = []
     loops_ = sorted(outline, key=lambda p: -abs(signed_area(p)))
     total = sum(perimeter(p) for p in loops_)
     if total <= 0:
         return [], ["The part has no outline to put tabs on."]
     want = count if count else max(int(s.min_tabs), int(round(total / max(s.tab_spacing_in, 0.5))))
-    length = width_in + 2 * TAB_OVERLAP_IN
-    need = s.tab_width_in + 2 * TAB_CORNER_MARGIN_IN
-
-    # Candidate stretches: (loop, start point, direction, usable from, to, arc offset)
-    spans, arc0 = [], 0.0
-    for loop in loops_:
-        n = len(loop)
-        for k in range(n):
-            a, b = loop[k], loop[(k + 1) % n]
-            L = float(np.hypot(*(b - a)))
-            if L >= need:
-                spans.append((a, (b - a) / L, TAB_CORNER_MARGIN_IN + s.tab_width_in / 2,
-                              L - TAB_CORNER_MARGIN_IN - s.tab_width_in / 2, arc0, True))
-            arc0 += L
-    if not spans:
-        notes.append("No straight edge is long enough for a tab; tabs are on curves.")
-        arc0 = 0.0
-        for loop in loops_:
-            n = len(loop)
-            for k in range(n):
-                a, b = loop[k], loop[(k + 1) % n]
-                L = float(np.hypot(*(b - a)))
-                if L > 0:
-                    spans.append((a, (b - a) / L, L / 2, L / 2, arc0, False))
-                arc0 += L
+    keep_clear = TAB_CORNER_MARGIN_IN + s.tab_width_in / 2
+    spots = _outline_spots(loops_, max(s.tab_width_in / 2, total / 400.0), keep_clear)
+    if not spots:
+        return [], ["No room for tabs on the outline."]
 
     def frame_reached(p, nrm):
         end = p + nrm * (width_in + TAB_OVERLAP_IN)
         return not grid.contains(channel_mask, end)[0]
 
-    reach = TAB_OVERLAP_IN + 2 * grid.cell
+    spots = [sp for sp in spots if frame_reached(sp[1], sp[2])]
+    half_h = s.tab_height_in / 2.0
+    zc_default = (z_lo + z_hi) / 2.0
 
-    def touches(p, nrm):
-        """Part wall under the tab's root across most of its width."""
-        if tree is None:
-            return True
-        near = section[tree.query_ball_point(p, s.tab_width_in / 2 + reach)]
-        if not len(near):
-            return False
-        rel = near - p
-        along = rel @ np.array([-nrm[1], nrm[0]])
-        depth = rel @ nrm
-        hit = along[(depth <= grid.cell) & (depth >= -reach)
-                    & (np.abs(along) <= s.tab_width_in / 2)]
-        if not len(hit):
-            return False
-        return hit.max() - hit.min() >= 0.6 * s.tab_width_in
-
-    # Every allowed spot, a half tab apart along each stretch.
-    spots = []
-    for a, d, u0, u1, off, straight in spans:
-        n = max(1, int(np.floor((u1 - u0) / (s.tab_width_in / 2))) + 1)
-        nrm = np.array([d[1], -d[0]])                # outward for a CCW loop
-        for u in np.linspace(u0, u1, n):
-            p = a + d * u
-            if frame_reached(p, nrm) and touches(p, nrm):
-                spots.append((off + float(u), p, nrm, straight))
+    # Probe every spot: three rays across the tab's width, from just out in
+    # the channel, at every slice.
+    placed = []          # (arc, p, nrm, straight, inset, zc)
+    if slices is not None and spots:
+        lat = np.array([-0.45, 0.0, 0.45]) * s.tab_width_in
+        P = np.array([sp[1] for sp in spots])
+        N = np.array([sp[2] for sp in spots])
+        T = np.column_stack([-N[:, 1], N[:, 0]])
+        start = 2 * grid.cell + 0.01
+        origins = (P[:, None, :] + N[:, None, :] * start
+                   + T[:, None, :] * lat[None, :, None]).reshape(-1, 2)
+        dirs = np.repeat(-N, len(lat), axis=0)
+        reach = start + MAX_INSET_IN + MIN_SOLID_IN + 0.1
+        entry, solid = slices.probe(origins, dirs, reach)
+        depth = entry - start                                   # in from the outline
+        ok = np.isfinite(depth) & (solid >= MIN_SOLID_IN) & (depth <= MAX_INSET_IN)
+        depth = np.where(ok, np.maximum(depth, 0.0), np.inf)
+        depth = depth.reshape(len(slices.z), len(spots), len(lat)).max(axis=2)   # (z, spot)
+        for i, (arc, p, nrm, straight) in enumerate(spots):
+            r = depth[:, i]
+            if not np.isfinite(r).any():
+                continue
+            touch = r <= max(TOUCH_TOL_IN, 2 * grid.cell)
+            if touch.any():
+                # The longest run of heights where the wall is at the outline.
+                runs, k = [], 0
+                while k < len(touch):
+                    if touch[k]:
+                        j = k
+                        while j + 1 < len(touch) and touch[j + 1]:
+                            j += 1
+                        runs.append((k, j))
+                        k = j + 1
+                    else:
+                        k += 1
+                a, b = max(runs, key=lambda ab: ab[1] - ab[0])
+            else:
+                best = np.nanmin(np.where(np.isfinite(r), r, np.nan))
+                near = np.nonzero(r <= best + TOUCH_TOL_IN)[0]
+                a = b = int(near[len(near) // 2])
+            zc = float((slices.z[a] + slices.z[b]) / 2.0)
+            zc = float(np.clip(zc, z_lo + half_h, max(z_hi - half_h, z_lo + half_h)))
+            inside = np.abs(slices.z - zc) <= half_h + slices.dz / 2.0
+            inset = float(r[inside].max()) if inside.any() else float(r[np.argmin(np.abs(slices.z - zc))])
+            if not np.isfinite(inset):
+                continue
+            placed.append((arc, p, nrm, straight, inset, zc))
+    else:
+        placed = [(arc, p, nrm, straight, 0.0, zc_default) for arc, p, nrm, straight in spots]
 
     chosen: list[Tab] = []
     min_sep = max(2 * s.tab_width_in, total / (want * 3.0))
     for k in range(want):
         target = (k + 0.5) * total / want
         best = None
-        for arc, p, nrm, straight in spots:
+        for arc, p, nrm, straight, inset, zc in placed:
             if any(np.hypot(t.x - p[0], t.y - p[1]) < min_sep for t in chosen):
                 continue
             gap = abs(arc - target)
             gap = min(gap, total - gap)
-            if best is None or gap < best[0]:
-                best = (gap, p, nrm, straight)
+            score = gap + INSET_COST * inset
+            if best is None or score < best[0]:
+                best = (score, p, nrm, straight, inset, zc)
         if best is None:
             continue
-        _g, p, nrm, straight = best
+        _s, p, nrm, straight, inset, zc = best
         chosen.append(Tab(float(p[0]), float(p[1]), float(nrm[0]), float(nrm[1]),
-                          length, float(s.tab_width_in), float(z0), float(z1), straight))
+                          width_in + inset + 2 * TAB_OVERLAP_IN, float(s.tab_width_in),
+                          zc - half_h, zc + half_h, straight, inset))
     if len(chosen) < want:
-        notes.append(f"Only {len(chosen)} of {want} tabs found a place on a straight edge "
-                     f"where the part's wall meets the tab height and the tab reaches the "
-                     f"frame.")
+        notes.append(f"Only {len(chosen)} of {want} tabs found a place where they reach the "
+                     f"frame and join solid part.")
     if not chosen:
-        notes.append("No tabs could be placed: set the tabs by hand or turn tabbed "
+        notes.append("No tabs could be placed: set the tab count by hand or turn tabbed "
                      "fixturing off for this part.")
     return chosen, notes
 
@@ -648,21 +778,21 @@ def plan(points_mm, triangles, rect_axes, rect_extents_mm, stock, part_volume_in
     origin_mm = (origin_local * MM) @ frame              # ... in the file's coordinates
     plo, phi = lo + shift, hi + shift
 
-    outline = [p + shift[:2] for p in loops(grid, fmask)]
+    # Traced along grid cells, a curved or slanted edge is a staircase one
+    # cell high; straightened past that, its corners are the part's own and
+    # tabs can sit on arcs and angled edges.
+    outline = [p + shift[:2] for p in loops(grid, fmask, tolerance=1.5 * grid.cell)]
     outline = [p for p in outline if signed_area(p) > 0]
     channel = [p + shift[:2] for p in loops(grid, cmask)]
     channel = [p for p in channel if signed_area(p) > 0]
     grid.lo = grid.lo + shift[:2]
 
-    if proc == VERTICAL:
-        zm = (plo[2] + phi[2]) / 2.0
-        z0, z1 = zm - s.tab_height_in / 2.0, zm + s.tab_height_in / 2.0
-    else:
-        z0, z1 = plo[2], plo[2] + s.tab_height_in
-    plan_pts = local + shift
-    section = section_points(plan_pts, tris, (z0 + z1) / 2.0, grid.cell / 2.0)
-    tabs, notes = place_tabs(outline, grid, cmask, s, w, z0, z1, count=tab_count,
-                             section=section)
+    # Each tab at its own height, where the part's wall is at the outline:
+    # the channel runs the part's full height either way (flat: down to its
+    # bottom, the floor below faced off in op 2).
+    slices = Slices(local + shift, tris, plo[2], phi[2])
+    tabs, notes = place_tabs(outline, grid, cmask, s, w, plo[2], phi[2], count=tab_count,
+                             slices=slices)
 
     warnings = list(notes)
     c_lo, c_hi = c_lo + shift[:2], c_hi + shift[:2]

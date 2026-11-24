@@ -31,7 +31,7 @@ from partestimator.machining.ui.viewer import (
     _style_line_actor,
 )
 
-from .view3d import ROLE_COLOURS
+from .colours import ROLE_COLOURS
 
 HIGHLIGHT = (0.20, 0.72, 0.35)
 BOX_COLOR = (0.12, 0.40, 0.90)          # same blue as the machining stock outline
